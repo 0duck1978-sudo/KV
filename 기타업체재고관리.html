@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>업체별 재고 관리</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">기타업체 DB 기준</p>
+        <h1>업체별 재고 관리</h1>
+      </div>
+      <div class="header-actions">
+        <button id="newProductButton" class="header-primary-btn" type="button">새 제품 등록</button>
+        <button id="exportCsv" class="ghost-btn" type="button">CSV</button>
+        <button id="resetData" class="ghost-btn danger" type="button">초기화</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="metrics" aria-label="요약">
+        <div class="metric">
+          <span>등록 품번</span>
+          <strong id="metricProducts">0</strong>
+        </div>
+        <div class="metric">
+          <span>업체 수</span>
+          <strong id="metricVendors">0</strong>
+        </div>
+        <div class="metric warning">
+          <span>부족 품번</span>
+          <strong id="metricShortages">0</strong>
+        </div>
+        <div class="metric">
+          <span>현재고 합계</span>
+          <strong id="metricStock">0</strong>
+        </div>
+      </section>
+
+      <section class="entry-panel" aria-label="입출고 입력">
+        <form id="movementForm" class="movement-form">
+          <label>
+            업체
+            <select id="vendorInput" required></select>
+          </label>
+          <label>
+            품번
+            <input id="productInput" list="productList" autocomplete="off" required />
+            <datalist id="productList"></datalist>
+          </label>
+          <label>
+            구분
+            <select id="typeInput">
+              <option value="in">완성품 추가</option>
+              <option value="out">출하</option>
+            </select>
+          </label>
+          <label>
+            수량
+            <input id="qtyInput" type="number" min="1" step="1" required />
+          </label>
+          <label>
+            일자
+            <input id="dateInput" type="date" required />
+          </label>
+          <label class="memo-field">
+            비고
+            <input id="memoInput" autocomplete="off" />
+          </label>
+          <button class="primary-btn" type="submit">등록</button>
+        </form>
+      </section>
+
+      <section class="controls" aria-label="조회 조건">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-view="stock" type="button">재고</button>
+          <button class="tab" data-view="shortage" type="button">부족현황</button>
+          <button class="tab" data-view="product" type="button">품번조회</button>
+          <button class="tab" data-view="schedule" type="button">납품/납기조회</button>
+          <button class="tab" data-view="delivered" type="button">납품완료</button>
+          <button class="tab" data-view="history" type="button">거래내역</button>
+        </div>
+        <div class="filters">
+          <select id="vendorFilter"></select>
+          <input id="searchInput" aria-label="검색어" placeholder="품번, 소번지, 날짜, 비고 검색" />
+        </div>
+      </section>
+
+      <section class="table-wrap" aria-live="polite">
+        <table>
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty-state">조회 결과가 없습니다.</div>
+      </section>
+    </main>
+
+    <dialog id="productDialog" class="edit-dialog">
+      <form id="productForm" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <span class="dialog-vendor">제품과 최초 발주를 함께 등록합니다</span>
+            <h2>새 제품 등록</h2>
+          </div>
+          <button id="closeProductDialog" class="icon-btn" type="button" aria-label="닫기" title="닫기">×</button>
+        </div>
+        <div class="edit-grid product-grid">
+          <label>
+            업체
+            <select id="newVendor" required></select>
+          </label>
+          <label>
+            품번
+            <input id="newProductCode" autocomplete="off" required />
+          </label>
+          <label>
+            소번지
+            <input id="newLocation" autocomplete="off" />
+          </label>
+          <label>
+            초기재고
+            <input id="newInitialStock" type="number" min="0" step="1" value="0" />
+          </label>
+          <label>
+            발주수량
+            <input id="newOrderQty" type="number" min="0" step="1" required />
+          </label>
+          <label>
+            납기일자
+            <input id="newDueDate" type="date" />
+          </label>
+          <label class="wide-field">
+            특이사항
+            <textarea id="newSpecialNote" rows="2"></textarea>
+          </label>
+          <label class="wide-field">
+            비고
+            <textarea id="newRemarks" rows="2"></textarea>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button id="cancelProductDialog" class="secondary-btn" type="button">취소</button>
+          <button class="primary-btn" type="submit">제품 등록</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="deliveryDialog" class="edit-dialog">
+      <form id="deliveryEditForm" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <span id="editVendor" class="dialog-vendor"></span>
+            <h2 id="editProductCode">납품정보 수정</h2>
+          </div>
+          <button id="closeDialog" class="icon-btn" type="button" aria-label="닫기" title="닫기">×</button>
+        </div>
+        <input id="editRecordId" type="hidden" />
+        <div class="edit-grid">
+          <label>
+            제품상태
+            <input id="editProductState" autocomplete="off" placeholder="예: 납품완료" />
+          </label>
+          <label>
+            납기일자
+            <input id="editDueDate" type="date" />
+          </label>
+          <label>
+            납품일자
+            <input id="editDeliveredDate" type="date" />
+          </label>
+          <label class="wide-field">
+            특이사항
+            <textarea id="editSpecialNote" rows="3"></textarea>
+          </label>
+          <label class="wide-field">
+            비고
+            <textarea id="editRemarks" rows="3"></textarea>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button id="cancelDialog" class="secondary-btn" type="button">취소</button>
+          <button class="primary-btn" type="submit">저장</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./data.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
