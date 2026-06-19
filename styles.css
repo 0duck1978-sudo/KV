@@ -169,6 +169,26 @@ textarea:focus {
   color: #344054;
 }
 
+.danger-btn {
+  background: #fff;
+  border: 1px solid #d92d20;
+  border-radius: 6px;
+  color: #b42318;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.danger-btn:hover {
+  background: var(--soft-red);
+}
+
+.danger-btn:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
 .ghost-btn {
   background: rgba(255, 255, 255, .08);
   border: 1px solid rgba(255, 255, 255, .32);
@@ -287,6 +307,22 @@ th.num {
   padding: 4px 9px;
 }
 
+.product-link {
+  background: none;
+  border: 0;
+  color: #174ea6;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.product-link:hover {
+  color: #0b418f;
+}
+
 .edit-dialog {
   border: 0;
   border-radius: 8px;
@@ -358,6 +394,27 @@ th.num {
   min-width: 86px;
 }
 
+.manage-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.manage-note {
+  background: var(--soft-red);
+  border-left: 3px solid #d92d20;
+  color: #7a271a;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 16px 0 0;
+  padding: 10px 12px;
+}
+
+.manage-actions {
+  flex-wrap: wrap;
+}
+
 .blank-date {
   color: #98a2b3;
 }
@@ -390,8 +447,13 @@ th.num {
 @media (max-width: 560px) {
   .metrics,
   .movement-form,
-  .edit-grid {
+  .edit-grid,
+  .manage-fields {
     grid-template-columns: 1fr;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
   }
 
   .wide-field {

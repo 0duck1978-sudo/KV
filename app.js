@@ -4,6 +4,8 @@ const movementStorageKey = "vendorInventoryMovements.v1";
 const deliveryEditStorageKey = "vendorDeliveryEdits.v1";
 const customProductStorageKey = "vendorCustomProducts.v1";
 const customDeliveryStorageKey = "vendorCustomDeliveries.v1";
+const deletedVendorStorageKey = "vendorDeletedVendors.v1";
+const deletedProductStorageKey = "vendorDeletedProducts.v1";
 
 const els = {
   metricProducts: document.querySelector("#metricProducts"),
@@ -26,6 +28,14 @@ const els = {
   exportCsv: document.querySelector("#exportCsv"),
   resetData: document.querySelector("#resetData"),
   newProductButton: document.querySelector("#newProductButton"),
+  manageItemsButton: document.querySelector("#manageItemsButton"),
+  manageDialog: document.querySelector("#manageDialog"),
+  manageVendor: document.querySelector("#manageVendor"),
+  manageProduct: document.querySelector("#manageProduct"),
+  deleteVendorButton: document.querySelector("#deleteVendorButton"),
+  deleteProductButton: document.querySelector("#deleteProductButton"),
+  closeManageDialog: document.querySelector("#closeManageDialog"),
+  cancelManageDialog: document.querySelector("#cancelManageDialog"),
   productDialog: document.querySelector("#productDialog"),
   productForm: document.querySelector("#productForm"),
   newVendor: document.querySelector("#newVendor"),
@@ -53,10 +63,13 @@ const els = {
 };
 
 let activeView = "stock";
+let selectedProductCode = "";
 let movements = loadJson(movementStorageKey, []);
 let deliveryEdits = loadJson(deliveryEditStorageKey, {});
 let customProducts = loadJson(customProductStorageKey, []);
 let customDeliveries = loadJson(customDeliveryStorageKey, []);
+let deletedVendors = loadJson(deletedVendorStorageKey, []);
+let deletedProducts = loadJson(deletedProductStorageKey, []);
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -84,6 +97,11 @@ function saveCustomData() {
   localStorage.setItem(customDeliveryStorageKey, JSON.stringify(customDeliveries));
 }
 
+function saveDeletedItems() {
+  localStorage.setItem(deletedVendorStorageKey, JSON.stringify(deletedVendors));
+  localStorage.setItem(deletedProductStorageKey, JSON.stringify(deletedProducts));
+}
+
 function fmtNum(value) {
   const n = Number(value || 0);
   return Number.isInteger(n) ? n.toLocaleString("ko-KR") : n.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
@@ -100,11 +118,15 @@ function inventoryVendors() {
 }
 
 function inventoryRows() {
-  return [...seed, ...customProducts];
+  return [...seed, ...customProducts].filter((item) => !isDeleted(item.vendor, item.productCode));
 }
 
 function itemKey(item) {
   return `${item.vendor}::${item.productCode}`;
+}
+
+function isDeleted(vendor, productCode) {
+  return deletedVendors.includes(vendor) || deletedProducts.includes(`${vendor}::${productCode}`);
 }
 
 function movementDelta(movement) {
@@ -136,7 +158,9 @@ function rowsWithStock() {
 }
 
 function deliveryRows() {
-  return [...deliverySeed, ...customDeliveries].map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
+  return [...deliverySeed, ...customDeliveries]
+    .filter((record) => !isDeleted(record.vendor, record.productCode))
+    .map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
 }
 
 function isDelivered(record) {
@@ -198,7 +222,9 @@ function filteredProductRows() {
   if (!query) return [];
   return deliveryRows().filter((row) => {
     const vendorOk = vendor === "all" || row.vendor === vendor;
-    return vendorOk && row.productCode.toLowerCase().includes(query);
+    const productCode = row.productCode.toLowerCase();
+    const productOk = selectedProductCode ? productCode === selectedProductCode.toLowerCase() : productCode.includes(query);
+    return vendorOk && productOk;
   });
 }
 
@@ -226,13 +252,18 @@ function render() {
 }
 
 function renderProductSearch(rows) {
-  const sorted = [...rows].sort((a, b) =>
-    a.vendor.localeCompare(b.vendor, "ko") || a.sourceRow - b.sourceRow,
-  );
-  setHead(["업체", "품번", "소번지", "제품상태", "발주수량", "당시재고", "납기일자", "납품일자", "비고", "특이사항", "원본기록", "수정"]);
+  const displayDate = (row) => row.deliveredDate || row.dueDate || "";
+  const sorted = [...rows].sort((a, b) => {
+    const left = displayDate(a);
+    const right = displayDate(b);
+    if (!left && right) return 1;
+    if (left && !right) return -1;
+    return left.localeCompare(right) || a.vendor.localeCompare(b.vendor, "ko") || a.sourceRow - b.sourceRow;
+  });
+  setHead(["업체", "품번", "소번지", "제품상태", "발주수량", "당시재고", "납기일자", "납품일자", "비고", "특이사항", "수정"]);
   setBody(sorted, (row) => [
     textCell(row.vendor),
-    textCell(row.productCode),
+    productLink(row.productCode),
     textCell(row.location),
     deliveryStatusBadge(row.productState),
     numCell(row.orderQty),
@@ -241,7 +272,6 @@ function renderProductSearch(rows) {
     textCell(row.deliveredDate),
     textCell(row.remarks),
     textCell(row.specialNote),
-    textCell(`${row.sourceSheet} ${row.sourceRow}행`),
     `<button class="row-edit-btn" type="button" data-edit-id="${escapeHtml(row.id)}">수정</button>`,
   ]);
   if (!els.searchInput.value.trim()) {
@@ -253,7 +283,7 @@ function renderStock(rows) {
   setHead(["업체", "품번", "소번지", "기존재고", "발주수량", "DB현재고", "입출고", "계산현재고", "상태", "특이사항"]);
   setBody(rows, (row) => [
     textCell(row.vendor),
-    textCell(row.productCode),
+    productLink(row.productCode),
     textCell(row.location),
     numCell(row.baseStock),
     numCell(row.orderQty),
@@ -269,7 +299,7 @@ function renderShortage(rows) {
   setHead(["업체", "품번", "소번지", "부족수량", "발주수량", "계산현재고", "재고확인날짜", "특이사항"]);
   setBody(rows.sort((a, b) => b.shortage - a.shortage), (row) => [
     textCell(row.vendor),
-    textCell(row.productCode),
+    productLink(row.productCode),
     textCell(row.location),
     numCell(row.shortage),
     numCell(row.orderQty),
@@ -288,7 +318,7 @@ function renderDelivery(rows, completedOnly) {
   setHead(["업체", "품번", "제품상태", "발주수량", "납기일자", "납품일자", "비고", "특이사항", "수정"]);
   setBody(sorted, (row) => [
     textCell(row.vendor),
-    textCell(row.productCode),
+    productLink(row.productCode),
     deliveryStatusBadge(row.productState),
     numCell(row.orderQty),
     textCell(row.dueDate),
@@ -304,7 +334,7 @@ function renderMovements(rows) {
   setBody(rows, (row) => [
     textCell(row.date),
     textCell(row.vendor),
-    textCell(row.productCode),
+    productLink(row.productCode),
     textCell(row.type === "in" ? "완성품 추가" : "출하"),
     numCell(row.qty),
     textCell(row.memo),
@@ -322,6 +352,10 @@ function setBody(rows, mapper) {
 
 function textCell(value) {
   return escapeHtml(value ?? "");
+}
+
+function productLink(productCode) {
+  return `<button class="product-link" type="button" data-product-code="${escapeHtml(productCode)}">${escapeHtml(productCode)}</button>`;
 }
 
 function numCell(value) {
@@ -392,6 +426,77 @@ function openProductDialog() {
   els.newProductCode.focus();
 }
 
+function populateManageProducts() {
+  const vendor = els.manageVendor.value;
+  const products = inventoryRows()
+    .filter((item) => item.vendor === vendor)
+    .map((item) => item.productCode)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .sort((a, b) => a.localeCompare(b, "ko"));
+  els.manageProduct.innerHTML = products
+    .map((productCode) => `<option value="${escapeHtml(productCode)}">${escapeHtml(productCode)}</option>`)
+    .join("");
+  els.deleteProductButton.disabled = products.length === 0;
+}
+
+function openManageDialog() {
+  const options = inventoryVendors()
+    .map((vendor) => `<option value="${escapeHtml(vendor)}">${escapeHtml(vendor)}</option>`)
+    .join("");
+  els.manageVendor.innerHTML = options;
+  const hasVendors = Boolean(options);
+  els.manageVendor.disabled = !hasVendors;
+  els.deleteVendorButton.disabled = !hasVendors;
+  populateManageProducts();
+  els.manageDialog.showModal();
+}
+
+function removeRelatedRecords(vendor, productCode = null) {
+  const matches = (row) => row.vendor === vendor && (!productCode || row.productCode === productCode);
+  const deliveryIds = [...deliverySeed, ...customDeliveries].filter(matches).map((row) => row.id);
+  movements = movements.filter((row) => !matches(row));
+  customProducts = customProducts.filter((row) => !matches(row));
+  customDeliveries = customDeliveries.filter((row) => !matches(row));
+  deliveryIds.forEach((id) => delete deliveryEdits[id]);
+  saveMovements();
+  saveDeliveryEdits();
+  saveCustomData();
+}
+
+function finishDelete() {
+  if (!allVendors().includes(els.vendorFilter.value)) els.vendorFilter.value = "all";
+  els.productInput.value = "";
+  populateSelects();
+  render();
+}
+
+function deleteProduct() {
+  const vendor = els.manageVendor.value;
+  const productCode = els.manageProduct.value;
+  if (!vendor || !productCode) return;
+  if (!confirm(`${vendor}의 ${productCode} 품번을 삭제할까요?\n관련 입출고·납품 기록도 함께 삭제됩니다.`)) return;
+  const key = `${vendor}::${productCode}`;
+  if (!deletedProducts.includes(key)) deletedProducts.push(key);
+  removeRelatedRecords(vendor, productCode);
+  saveDeletedItems();
+  els.manageDialog.close();
+  finishDelete();
+  if (inventoryVendors().length) openManageDialog();
+}
+
+function deleteVendor() {
+  const vendor = els.manageVendor.value;
+  if (!vendor) return;
+  const productCount = inventoryRows().filter((row) => row.vendor === vendor).length;
+  if (!confirm(`${vendor} 업체와 품번 ${productCount}개를 모두 삭제할까요?\n관련 입출고·납품 기록도 함께 삭제됩니다.`)) return;
+  if (!deletedVendors.includes(vendor)) deletedVendors.push(vendor);
+  deletedProducts = deletedProducts.filter((key) => !key.startsWith(`${vendor}::`));
+  removeRelatedRecords(vendor);
+  saveDeletedItems();
+  els.manageDialog.close();
+  finishDelete();
+}
+
 function registerProduct(event) {
   event.preventDefault();
   const vendor = els.newVendor.value;
@@ -450,6 +555,7 @@ function registerProduct(event) {
   els.productDialog.close();
   populateSelects();
   activeView = "product";
+  selectedProductCode = productCode;
   els.searchInput.value = productCode;
   els.searchInput.placeholder = "조회할 품번을 입력하세요";
   render();
@@ -497,8 +603,8 @@ function currentExport() {
     const rows = filteredProductRows();
     return {
       name: "품번조회",
-      header: ["업체", "품번", "소번지", "제품상태", "발주수량", "당시재고", "납기일자", "납품일자", "비고", "특이사항", "원본시트", "원본행"],
-      rows: rows.map((row) => [row.vendor, row.productCode, row.location, row.productState, row.orderQty, row.currentStock, row.dueDate, row.deliveredDate, row.remarks, row.specialNote, row.sourceSheet, row.sourceRow]),
+      header: ["업체", "품번", "소번지", "제품상태", "발주수량", "당시재고", "납기일자", "납품일자", "비고", "특이사항"],
+      rows: rows.map((row) => [row.vendor, row.productCode, row.location, row.productState, row.orderQty, row.currentStock, row.dueDate, row.deliveredDate, row.remarks, row.specialNote]),
     };
   }
   if (activeView === "schedule" || activeView === "delivered") {
@@ -534,14 +640,17 @@ function csvCell(value) {
 }
 
 function resetData() {
-  if (!confirm("입고/출하 내역, 수정한 납품정보, 직접 등록한 제품을 모두 삭제할까요?")) return;
+  if (!confirm("입고/출하 내역, 수정한 납품정보, 직접 등록한 제품과 삭제 설정을 모두 초기화할까요?\n삭제했던 기본 업체와 품번은 다시 표시됩니다.")) return;
   movements = [];
   deliveryEdits = {};
   customProducts = [];
   customDeliveries = [];
+  deletedVendors = [];
+  deletedProducts = [];
   saveMovements();
   saveDeliveryEdits();
   saveCustomData();
+  saveDeletedItems();
   populateSelects();
   render();
 }
@@ -549,6 +658,7 @@ function resetData() {
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     activeView = tab.dataset.view;
+    if (activeView !== "product") selectedProductCode = "";
     els.searchInput.placeholder = activeView === "product" ? "조회할 품번을 입력하세요" : "품번, 소번지, 날짜, 비고 검색";
     render();
   });
@@ -560,14 +670,33 @@ els.vendorInput.addEventListener("change", () => {
   updateProductList();
 });
 els.vendorFilter.addEventListener("change", render);
-els.searchInput.addEventListener("input", render);
+els.searchInput.addEventListener("input", () => {
+  selectedProductCode = "";
+  render();
+});
 els.exportCsv.addEventListener("click", exportCsv);
 els.resetData.addEventListener("click", resetData);
 els.newProductButton.addEventListener("click", openProductDialog);
+els.manageItemsButton.addEventListener("click", openManageDialog);
+els.manageVendor.addEventListener("change", populateManageProducts);
+els.deleteProductButton.addEventListener("click", deleteProduct);
+els.deleteVendorButton.addEventListener("click", deleteVendor);
+els.closeManageDialog.addEventListener("click", () => els.manageDialog.close());
+els.cancelManageDialog.addEventListener("click", () => els.manageDialog.close());
 els.productForm.addEventListener("submit", registerProduct);
 els.closeProductDialog.addEventListener("click", () => els.productDialog.close());
 els.cancelProductDialog.addEventListener("click", () => els.productDialog.close());
 els.tableBody.addEventListener("click", (event) => {
+  const productButton = event.target.closest("[data-product-code]");
+  if (productButton) {
+    selectedProductCode = productButton.dataset.productCode;
+    activeView = "product";
+    els.vendorFilter.value = "all";
+    els.searchInput.value = selectedProductCode;
+    els.searchInput.placeholder = "조회할 품번을 입력하세요";
+    render();
+    return;
+  }
   const button = event.target.closest("[data-edit-id]");
   if (button) openDeliveryEditor(button.dataset.editId);
 });

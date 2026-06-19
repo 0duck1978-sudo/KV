@@ -14,6 +14,7 @@
       </div>
       <div class="header-actions">
         <button id="newProductButton" class="header-primary-btn" type="button">새 제품 등록</button>
+        <button id="manageItemsButton" class="ghost-btn" type="button">항목 관리</button>
         <button id="exportCsv" class="ghost-btn" type="button">CSV</button>
         <button id="resetData" class="ghost-btn danger" type="button">초기화</button>
       </div>
@@ -143,6 +144,34 @@
         <div class="dialog-actions">
           <button id="cancelProductDialog" class="secondary-btn" type="button">취소</button>
           <button class="primary-btn" type="submit">제품 등록</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="manageDialog" class="edit-dialog manage-dialog">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <span class="dialog-vendor">삭제할 업체 또는 품번을 선택합니다</span>
+            <h2>업체·품번 관리</h2>
+          </div>
+          <button id="closeManageDialog" class="icon-btn" type="button" aria-label="닫기" title="닫기">×</button>
+        </div>
+        <div class="manage-fields">
+          <label>
+            업체
+            <select id="manageVendor"></select>
+          </label>
+          <label>
+            품번
+            <select id="manageProduct"></select>
+          </label>
+        </div>
+        <p class="manage-note">업체를 삭제하면 해당 업체의 모든 품번과 입력 기록이 함께 삭제됩니다.</p>
+        <div class="dialog-actions manage-actions">
+          <button id="deleteVendorButton" class="danger-btn" type="button">업체 삭제</button>
+          <button id="deleteProductButton" class="danger-btn" type="button">품번 삭제</button>
+          <button id="cancelManageDialog" class="secondary-btn" type="button">닫기</button>
         </div>
       </form>
     </dialog>
