@@ -7,6 +7,7 @@ const customDeliveryStorageKey = "vendorCustomDeliveries.v1";
 const deletedVendorStorageKey = "vendorDeletedVendors.v1";
 const deletedProductStorageKey = "vendorDeletedProducts.v1";
 const baseStockEditStorageKey = "vendorBaseStockEdits.v1";
+const deletedDeliveryStorageKey = "vendorDeletedDeliveries.v1";
 
 const els = {
   metricProducts: document.querySelector("#metricProducts"),
@@ -36,6 +37,8 @@ const els = {
   manageDialog: document.querySelector("#manageDialog"),
   manageVendor: document.querySelector("#manageVendor"),
   manageProduct: document.querySelector("#manageProduct"),
+  manageProductList: document.querySelector("#manageProductList"),
+  manageRecord: document.querySelector("#manageRecord"),
   deleteVendorButton: document.querySelector("#deleteVendorButton"),
   deleteProductButton: document.querySelector("#deleteProductButton"),
   closeManageDialog: document.querySelector("#closeManageDialog"),
@@ -93,6 +96,7 @@ let customDeliveries = loadJson(customDeliveryStorageKey, []);
 let deletedVendors = loadJson(deletedVendorStorageKey, []);
 let deletedProducts = loadJson(deletedProductStorageKey, []);
 let baseStockEdits = loadJson(baseStockEditStorageKey, {});
+let deletedDeliveryIds = loadJson(deletedDeliveryStorageKey, []);
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -127,6 +131,10 @@ function saveDeletedItems() {
 
 function saveBaseStockEdits() {
   localStorage.setItem(baseStockEditStorageKey, JSON.stringify(baseStockEdits));
+}
+
+function saveDeletedDeliveries() {
+  localStorage.setItem(deletedDeliveryStorageKey, JSON.stringify(deletedDeliveryIds));
 }
 
 function fmtNum(value) {
@@ -172,7 +180,9 @@ function movementMap() {
 function orderQtyAdjustmentMap() {
   const map = new Map();
   for (const record of [...deliverySeed, ...customDeliveries]) {
-    const editedQty = Number(deliveryEdits[record.id]?.orderQty ?? record.orderQty ?? 0);
+    const editedQty = deletedDeliveryIds.includes(record.id)
+      ? 0
+      : Number(deliveryEdits[record.id]?.orderQty ?? record.orderQty ?? 0);
     const originalQty = Number(record.orderQty || 0);
     const difference = editedQty - originalQty;
     if (difference) map.set(itemKey(record), (map.get(itemKey(record)) || 0) + difference);
@@ -230,6 +240,7 @@ function rowsWithStock() {
 
 function deliveryRows() {
   return [...deliverySeed, ...customDeliveries]
+    .filter((record) => !deletedDeliveryIds.includes(record.id))
     .filter((record) => !isDeleted(record.vendor, record.productCode))
     .map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
 }
@@ -517,10 +528,33 @@ function populateManageProducts() {
     .map((item) => item.productCode)
     .filter((value, index, values) => values.indexOf(value) === index)
     .sort((a, b) => a.localeCompare(b, "ko"));
-  els.manageProduct.innerHTML = products
-    .map((productCode) => `<option value="${escapeHtml(productCode)}">${escapeHtml(productCode)}</option>`)
+  els.manageProductList.innerHTML = products
+    .map((productCode) => `<option value="${escapeHtml(productCode)}"></option>`)
     .join("");
-  els.deleteProductButton.disabled = products.length === 0;
+  els.manageProduct.value = "";
+  populateManageRecords();
+}
+
+function selectedManageProduct() {
+  const input = els.manageProduct.value.trim().toLowerCase();
+  return inventoryRows().find((item) => item.vendor === els.manageVendor.value && item.productCode.toLowerCase() === input)?.productCode || "";
+}
+
+function populateManageRecords() {
+  const vendor = els.manageVendor.value;
+  const productCode = selectedManageProduct();
+  const records = deliveryRows()
+    .filter((record) => record.vendor === vendor && record.productCode === productCode)
+    .sort((a, b) => (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99"));
+  els.manageRecord.innerHTML = records.length
+    ? records.map((record, index) => {
+      const date = record.dueDate || "납기일자 없음";
+      const state = record.productState || "미완료";
+      return `<option value="${escapeHtml(record.id)}">${index + 1}. ${escapeHtml(date)} | 발주 ${fmtNum(record.orderQty)} | ${escapeHtml(state)}</option>`;
+    }).join("")
+    : `<option value="">납기 기록 없음</option>`;
+  els.manageRecord.disabled = !productCode || records.length === 0;
+  els.deleteProductButton.disabled = !productCode;
 }
 
 function openManageDialog() {
@@ -542,12 +576,14 @@ function removeRelatedRecords(vendor, productCode = null) {
   customProducts = customProducts.filter((row) => !matches(row));
   customDeliveries = customDeliveries.filter((row) => !matches(row));
   deliveryIds.forEach((id) => delete deliveryEdits[id]);
+  deletedDeliveryIds = deletedDeliveryIds.filter((id) => !deliveryIds.includes(id));
   Object.keys(baseStockEdits).forEach((key) => {
     if (key === `${vendor}::${productCode}` || (!productCode && key.startsWith(`${vendor}::`))) delete baseStockEdits[key];
   });
   saveMovements();
   saveDeliveryEdits();
   saveBaseStockEdits();
+  saveDeletedDeliveries();
   saveCustomData();
 }
 
@@ -560,8 +596,27 @@ function finishDelete() {
 
 function deleteProduct() {
   const vendor = els.manageVendor.value;
-  const productCode = els.manageProduct.value;
+  const productCode = selectedManageProduct();
   if (!vendor || !productCode) return;
+  const records = deliveryRows().filter((record) => record.vendor === vendor && record.productCode === productCode);
+  if (records.length > 1) {
+    const record = records.find((item) => item.id === els.manageRecord.value);
+    if (!record) return;
+    const date = record.dueDate || "납기일자 없음";
+    if (!confirm(`${vendor}의 ${productCode}\n${date} / 발주 ${fmtNum(record.orderQty)}개 기록을 삭제할까요?`)) return;
+    if (!deletedDeliveryIds.includes(record.id)) deletedDeliveryIds.push(record.id);
+    delete deliveryEdits[record.id];
+    saveDeletedDeliveries();
+    saveDeliveryEdits();
+    els.manageDialog.close();
+    finishDelete();
+    openManageDialog();
+    els.manageVendor.value = vendor;
+    populateManageProducts();
+    els.manageProduct.value = productCode;
+    populateManageRecords();
+    return;
+  }
   if (!confirm(`${vendor}의 ${productCode} 품번을 삭제할까요?\n관련 입출고·납품 기록도 함께 삭제됩니다.`)) return;
   const key = `${vendor}::${productCode}`;
   if (!deletedProducts.includes(key)) deletedProducts.push(key);
@@ -810,11 +865,13 @@ function resetData() {
   deletedVendors = [];
   deletedProducts = [];
   baseStockEdits = {};
+  deletedDeliveryIds = [];
   saveMovements();
   saveDeliveryEdits();
   saveCustomData();
   saveDeletedItems();
   saveBaseStockEdits();
+  saveDeletedDeliveries();
   populateSelects();
   render();
 }
@@ -843,6 +900,7 @@ els.resetData.addEventListener("click", resetData);
 els.newProductButton.addEventListener("click", openProductDialog);
 els.manageItemsButton.addEventListener("click", openManageDialog);
 els.manageVendor.addEventListener("change", populateManageProducts);
+els.manageProduct.addEventListener("input", populateManageRecords);
 els.deleteProductButton.addEventListener("click", deleteProduct);
 els.deleteVendorButton.addEventListener("click", deleteVendor);
 els.closeManageDialog.addEventListener("click", () => els.manageDialog.close());
