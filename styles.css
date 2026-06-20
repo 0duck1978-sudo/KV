@@ -25,6 +25,55 @@ body {
   color: var(--ink);
 }
 
+.auth-screen {
+  align-items: center;
+  background: #eef2f7;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.auth-screen[hidden] {
+  display: none;
+}
+
+.auth-panel {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(31, 41, 55, .12);
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+  width: min(100%, 420px);
+}
+
+.auth-panel .eyebrow {
+  color: var(--accent);
+}
+
+.auth-panel h1 {
+  font-size: 24px;
+  margin: 0;
+}
+
+.auth-message {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 4px;
+}
+
+.auth-actions,
+.user-row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-actions button {
+  flex: 1;
+}
+
 button,
 input,
 select,
@@ -53,8 +102,20 @@ textarea {
 }
 
 .header-actions {
+  align-items: center;
   display: flex;
   gap: 8px;
+}
+
+.signed-in-user,
+.sync-status {
+  color: #d6deea;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sync-status.error {
+  color: #ffb4a8;
 }
 
 .app-shell {
@@ -453,6 +514,37 @@ th.num {
   min-width: 86px;
 }
 
+.user-dialog-content {
+  padding: 20px;
+}
+
+.user-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  min-width: min(680px, 80vw);
+}
+
+.user-row {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 12px 0;
+}
+
+.user-row strong,
+.user-row span {
+  display: block;
+}
+
+.user-row span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
 .manage-fields {
   display: grid;
   gap: 12px;
@@ -513,6 +605,15 @@ th.num {
 
   .header-actions {
     flex-wrap: wrap;
+  }
+
+  .user-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .user-list {
+    min-width: 0;
   }
 
   .wide-field {
