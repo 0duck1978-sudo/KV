@@ -119,6 +119,10 @@ label {
   gap: 5px;
 }
 
+label[hidden] {
+  display: none;
+}
+
 input,
 select,
 textarea {

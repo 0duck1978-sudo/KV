@@ -42,6 +42,8 @@ const els = {
   productDialog: document.querySelector("#productDialog"),
   productForm: document.querySelector("#productForm"),
   newVendor: document.querySelector("#newVendor"),
+  newVendorNameField: document.querySelector("#newVendorNameField"),
+  newVendorName: document.querySelector("#newVendorName"),
   newProductCode: document.querySelector("#newProductCode"),
   newLocation: document.querySelector("#newLocation"),
   newInitialStock: document.querySelector("#newInitialStock"),
@@ -219,7 +221,7 @@ function populateSelects() {
     .map((vendor) => `<option value="${escapeHtml(vendor)}">${escapeHtml(vendor)}</option>`)
     .join("");
   els.vendorInput.innerHTML = entryOptions;
-  els.newVendor.innerHTML = filterOptions;
+  els.newVendor.innerHTML = `${filterOptions}<option value="__new__">새 업체 등록</option>`;
   els.vendorFilter.innerHTML = `<option value="all">전체 업체</option>${filterOptions}`;
   updateProductList();
 }
@@ -470,8 +472,17 @@ function makeId(prefix) {
 function openProductDialog() {
   els.productForm.reset();
   els.newInitialStock.value = "0";
+  toggleNewVendorField();
   els.productDialog.showModal();
-  els.newProductCode.focus();
+  (els.newVendor.value === "__new__" ? els.newVendorName : els.newProductCode).focus();
+}
+
+function toggleNewVendorField() {
+  const isNewVendor = els.newVendor.value === "__new__";
+  els.newVendorNameField.hidden = !isNewVendor;
+  els.newVendorName.required = isNewVendor;
+  if (!isNewVendor) els.newVendorName.value = "";
+  if (isNewVendor && els.productDialog.open) els.newVendorName.focus();
 }
 
 function populateManageProducts() {
@@ -547,7 +558,8 @@ function deleteVendor() {
 
 function registerProduct(event) {
   event.preventDefault();
-  const vendor = els.newVendor.value;
+  const isNewVendor = els.newVendor.value === "__new__";
+  const vendor = isNewVendor ? els.newVendorName.value.trim() : els.newVendor.value;
   const productCode = els.newProductCode.value.trim();
   const location = els.newLocation.value.trim();
   const initialStock = Number(els.newInitialStock.value || 0);
@@ -558,6 +570,10 @@ function registerProduct(event) {
 
   if (!vendor || !productCode) {
     alert("업체와 품번을 입력해주세요.");
+    return;
+  }
+  if (isNewVendor && allVendors().some((name) => name.toLowerCase() === vendor.toLowerCase())) {
+    alert("이미 등록된 업체입니다. 업체 목록에서 선택해주세요.");
     return;
   }
   if (!Number.isFinite(initialStock) || initialStock < 0 || !Number.isFinite(orderQty) || orderQty < 0) {
@@ -599,7 +615,9 @@ function registerProduct(event) {
     sourceSheet: "직접등록",
     sourceRow: customDeliveries.length + 1,
   });
+  deletedVendors = deletedVendors.filter((name) => name !== vendor);
   saveCustomData();
+  saveDeletedItems();
   els.productDialog.close();
   populateSelects();
   activeView = "product";
@@ -786,6 +804,7 @@ els.deleteVendorButton.addEventListener("click", deleteVendor);
 els.closeManageDialog.addEventListener("click", () => els.manageDialog.close());
 els.cancelManageDialog.addEventListener("click", () => els.manageDialog.close());
 els.productForm.addEventListener("submit", registerProduct);
+els.newVendor.addEventListener("change", toggleNewVendorField);
 els.closeProductDialog.addEventListener("click", () => els.productDialog.close());
 els.cancelProductDialog.addEventListener("click", () => els.productDialog.close());
 els.tableBody.addEventListener("click", (event) => {
