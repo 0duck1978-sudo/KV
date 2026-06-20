@@ -6,6 +6,7 @@ const customProductStorageKey = "vendorCustomProducts.v1";
 const customDeliveryStorageKey = "vendorCustomDeliveries.v1";
 const deletedVendorStorageKey = "vendorDeletedVendors.v1";
 const deletedProductStorageKey = "vendorDeletedProducts.v1";
+const baseStockEditStorageKey = "vendorBaseStockEdits.v1";
 
 const els = {
   metricProducts: document.querySelector("#metricProducts"),
@@ -58,6 +59,8 @@ const els = {
   editRecordId: document.querySelector("#editRecordId"),
   editVendor: document.querySelector("#editVendor"),
   editProductCode: document.querySelector("#editProductCode"),
+  editBaseStock: document.querySelector("#editBaseStock"),
+  editOrderQty: document.querySelector("#editOrderQty"),
   editProductState: document.querySelector("#editProductState"),
   editDueDate: document.querySelector("#editDueDate"),
   editDeliveredDate: document.querySelector("#editDeliveredDate"),
@@ -89,6 +92,7 @@ let customProducts = loadJson(customProductStorageKey, []);
 let customDeliveries = loadJson(customDeliveryStorageKey, []);
 let deletedVendors = loadJson(deletedVendorStorageKey, []);
 let deletedProducts = loadJson(deletedProductStorageKey, []);
+let baseStockEdits = loadJson(baseStockEditStorageKey, {});
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -119,6 +123,10 @@ function saveCustomData() {
 function saveDeletedItems() {
   localStorage.setItem(deletedVendorStorageKey, JSON.stringify(deletedVendors));
   localStorage.setItem(deletedProductStorageKey, JSON.stringify(deletedProducts));
+}
+
+function saveBaseStockEdits() {
+  localStorage.setItem(baseStockEditStorageKey, JSON.stringify(baseStockEdits));
 }
 
 function fmtNum(value) {
@@ -161,8 +169,20 @@ function movementMap() {
   return map;
 }
 
+function orderQtyAdjustmentMap() {
+  const map = new Map();
+  for (const record of [...deliverySeed, ...customDeliveries]) {
+    const editedQty = Number(deliveryEdits[record.id]?.orderQty ?? record.orderQty ?? 0);
+    const originalQty = Number(record.orderQty || 0);
+    const difference = editedQty - originalQty;
+    if (difference) map.set(itemKey(record), (map.get(itemKey(record)) || 0) + difference);
+  }
+  return map;
+}
+
 function rowsWithStock() {
   const deltas = movementMap();
+  const orderAdjustments = orderQtyAdjustmentMap();
   const dueDates = new Map();
   const deliveryStates = new Map();
   for (const record of deliveryRows()) {
@@ -181,7 +201,10 @@ function rowsWithStock() {
   }
   return inventoryRows().map((item) => {
     const adjustment = deltas.get(itemKey(item)) || 0;
-    const available = Number(item.currentStock || 0) + adjustment;
+    const orderAdjustment = orderAdjustments.get(itemKey(item)) || 0;
+    const baseStock = Number(baseStockEdits[itemKey(item)] ?? item.baseStock ?? 0);
+    const orderQty = Number(item.orderQty || 0) + orderAdjustment;
+    const available = baseStock - orderQty + adjustment;
     const dates = (dueDates.get(itemKey(item)) || []).sort();
     const records = deliveryStates.get(itemKey(item)) || [];
     const deliveredCount = records.filter(isDelivered).length;
@@ -194,6 +217,8 @@ function rowsWithStock() {
         : stockStatus;
     return {
       ...item,
+      baseStock,
+      orderQty,
       adjustment,
       available,
       dueDate: dates.length ? `${dates[0]}${dates.length > 1 ? " 외" : ""}` : "",
@@ -517,8 +542,12 @@ function removeRelatedRecords(vendor, productCode = null) {
   customProducts = customProducts.filter((row) => !matches(row));
   customDeliveries = customDeliveries.filter((row) => !matches(row));
   deliveryIds.forEach((id) => delete deliveryEdits[id]);
+  Object.keys(baseStockEdits).forEach((key) => {
+    if (key === `${vendor}::${productCode}` || (!productCode && key.startsWith(`${vendor}::`))) delete baseStockEdits[key];
+  });
   saveMovements();
   saveDeliveryEdits();
+  saveBaseStockEdits();
   saveCustomData();
 }
 
@@ -630,9 +659,12 @@ function registerProduct(event) {
 function openDeliveryEditor(recordId) {
   const record = deliveryRows().find((row) => row.id === recordId);
   if (!record) return;
+  const stockItem = rowsWithStock().find((row) => row.vendor === record.vendor && row.productCode === record.productCode);
   els.editRecordId.value = record.id;
   els.editVendor.textContent = record.vendor;
   els.editProductCode.textContent = record.productCode;
+  els.editBaseStock.value = stockItem?.baseStock ?? 0;
+  els.editOrderQty.value = record.orderQty;
   els.editProductState.value = record.productState;
   els.editDueDate.value = record.dueDate;
   els.editDeliveredDate.value = record.deliveredDate;
@@ -644,7 +676,16 @@ function openDeliveryEditor(recordId) {
 function saveDeliveryRecord(event) {
   event.preventDefault();
   const id = els.editRecordId.value;
+  const record = deliveryRows().find((row) => row.id === id);
+  const baseStock = Number(els.editBaseStock.value);
+  const orderQty = Number(els.editOrderQty.value);
+  if (!record || !Number.isFinite(baseStock) || baseStock < 0 || !Number.isFinite(orderQty) || orderQty < 0) {
+    alert("기존재고와 발주수량을 확인해주세요.");
+    return;
+  }
+  baseStockEdits[itemKey(record)] = baseStock;
   deliveryEdits[id] = {
+    orderQty,
     productState: els.editProductState.value.trim(),
     dueDate: els.editDueDate.value,
     deliveredDate: els.editDeliveredDate.value,
@@ -652,6 +693,7 @@ function saveDeliveryRecord(event) {
     remarks: els.editRemarks.value.trim(),
   };
   saveDeliveryEdits();
+  saveBaseStockEdits();
   els.deliveryDialog.close();
   render();
 }
@@ -760,17 +802,19 @@ function csvCell(value) {
 }
 
 function resetData() {
-  if (!confirm("입고/출하 내역, 수정한 납품정보, 직접 등록한 제품과 삭제 설정을 모두 초기화할까요?\n삭제했던 기본 업체와 품번은 다시 표시됩니다.")) return;
+  if (!confirm("입고/출하 내역, 수정한 재고·납품정보, 직접 등록한 제품과 삭제 설정을 모두 초기화할까요?\n삭제했던 기본 업체와 품번은 다시 표시됩니다.")) return;
   movements = [];
   deliveryEdits = {};
   customProducts = [];
   customDeliveries = [];
   deletedVendors = [];
   deletedProducts = [];
+  baseStockEdits = {};
   saveMovements();
   saveDeliveryEdits();
   saveCustomData();
   saveDeletedItems();
+  saveBaseStockEdits();
   populateSelects();
   render();
 }

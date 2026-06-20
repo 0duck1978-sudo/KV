@@ -197,6 +197,14 @@
         <input id="editRecordId" type="hidden" />
         <div class="edit-grid">
           <label>
+            기존재고
+            <input id="editBaseStock" type="number" min="0" step="1" required />
+          </label>
+          <label>
+            발주수량
+            <input id="editOrderQty" type="number" min="0" step="1" required />
+          </label>
+          <label>
             제품상태
             <input id="editProductState" autocomplete="off" placeholder="예: 납품완료" />
           </label>
