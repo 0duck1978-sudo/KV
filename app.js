@@ -20,10 +20,7 @@ const els = {
   searchInput: document.querySelector("#searchInput"),
   tableHead: document.querySelector("#tableHead"),
   tableBody: document.querySelector("#tableBody"),
-  emptyState: document.querySelector("#emptyState"),
-  // 버튼 추가
-  btnStock: document.querySelector("button:has(text), .nav-btn, #btnStock") || document.querySelectorAll("button")[4], // 재고 버튼 위치 자동 매칭
-  btnShortage: document.querySelectorAll("button")[5] // 부족현황 버튼 위치 자동 매칭
+  emptyState: document.querySelector("#emptyState")
 };
 
 let activeView = "stock"; // "stock" 또는 "shortage"
@@ -40,6 +37,7 @@ async function fetchSupabaseData() {
     allData = await response.json();
     populateFilters();
     render();
+    setupButtonEvents(); // 버튼 이벤트 다시 연결
   } catch (err) {
     console.error(err);
     if(els.emptyState) els.emptyState.textContent = "데이터를 불러오는 중 오류가 발생했습니다.";
@@ -76,7 +74,7 @@ function render() {
   const selectedVendor = els.vendorFilter ? els.vendorFilter.value : "all";
   
   const filtered = allData.filter(row => {
-    // 상단 탭 필터링 (부족현황 클릭 시 현재재고가 0 미만인 것만 필터)
+    // 부족현황 클릭 시 현재재고가 0 미만인 것만 남김
     if (activeView === "shortage" && Number(row.현재재고 || 0) >= 0) return false;
     
     const matchVendor = selectedVendor === "all" || row.업체 === selectedVendor;
@@ -113,15 +111,18 @@ function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
 
-// 상단 버튼 이벤트 리스너 설정
-const buttons = document.querySelectorAll("button");
-buttons.forEach(btn => {
-  if (btn.textContent.includes("재고")) {
-    btn.addEventListener("click", () => { activeView = "stock"; render(); });
-  } else if (btn.textContent.includes("부족현황")) {
-    btn.addEventListener("click", () => { activeView = "shortage"; render(); });
-  }
-});
+// 상단 메뉴 버튼 연결 함수 보완
+function setupButtonEvents() {
+  const buttons = document.querySelectorAll("button, .nav-btn");
+  buttons.forEach(btn => {
+    const txt = btn.textContent.trim();
+    if (txt === "재고") {
+      btn.addEventListener("click", (e) => { e.preventDefault(); activeView = "stock"; render(); });
+    } else if (txt === "부족현황") {
+      btn.addEventListener("click", (e) => { e.preventDefault(); activeView = "shortage"; render(); });
+    }
+  });
+}
 
 if (els.vendorFilter) els.vendorFilter.addEventListener("change", render);
 if (els.searchInput) els.searchInput.addEventListener("input", render);
