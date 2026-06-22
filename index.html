@@ -112,6 +112,17 @@
           <select id="vendorFilter"></select>
           <input id="searchInput" aria-label="검색어" placeholder="품번, 소번지, 날짜, 비고 검색" />
         </div>
+        <div id="historyDateFilters" class="history-date-filters" hidden>
+          <label>
+            시작일
+            <input id="historyDateFrom" type="date" />
+          </label>
+          <label>
+            종료일
+            <input id="historyDateTo" type="date" />
+          </label>
+          <button id="clearHistoryDates" class="secondary-btn" type="button">기간 초기화</button>
+        </div>
       </section>
 
       <nav id="productNavigation" class="product-navigation" aria-label="품번 조회 이동" hidden>
