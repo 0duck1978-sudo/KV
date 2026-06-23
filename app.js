@@ -302,13 +302,32 @@ function itemKey(item) {
   return `${item.vendor}::${item.productCode}`;
 }
 
+function stockKey(item) {
+  const productCode = typeof item === "string" ? item : item?.productCode;
+  return String(productCode || "").trim().toLowerCase();
+}
+
+function sameProductItems(productCode) {
+  const key = stockKey(productCode);
+  return inventoryRows().filter((item) => stockKey(item) === key);
+}
+
+function shouldShareProductStock(productCode) {
+  const key = stockKey(productCode);
+  const vendors = new Set([
+    ...inventoryRows().filter((item) => stockKey(item) === key).map((item) => item.vendor),
+    ...baseDeliveryRows().filter((item) => stockKey(item) === key).map((item) => item.vendor),
+  ]);
+  return vendors.size > 1;
+}
+
 function isDeleted(vendor, productCode) {
   return deletedVendors.includes(vendor) || deletedProducts.includes(`${vendor}::${productCode}`);
 }
 
 function movementTotalsMap() {
   const map = new Map();
-  for (const movement of movements) {
+  for (const movement of movements.filter((row) => !row.shareByProduct)) {
     const key = `${movement.vendor}::${movement.productCode}`;
     const totals = map.get(key) || { inbound: 0, outbound: 0 };
     if (movement.type === "in") totals.inbound += Number(movement.qty || 0);
@@ -318,10 +337,43 @@ function movementTotalsMap() {
   return map;
 }
 
+function sharedMovementTotalsMap() {
+  const map = new Map();
+  for (const movement of movements.filter((row) => row.shareByProduct)) {
+    const key = stockKey(movement);
+    const totals = map.get(key) || { inbound: 0, outbound: 0 };
+    if (movement.type === "in") totals.inbound += Number(movement.qty || 0);
+    if (movement.type === "out") totals.outbound += Number(movement.qty || 0);
+    map.set(key, totals);
+  }
+  return map;
+}
+
+function movementTotalsForItem(item, vendorTotals = movementTotalsMap(), productTotals = sharedMovementTotalsMap()) {
+  const own = vendorTotals.get(itemKey(item)) || { inbound: 0, outbound: 0 };
+  const shared = productTotals.get(stockKey(item)) || { inbound: 0, outbound: 0 };
+  return {
+    inbound: own.inbound + shared.inbound,
+    outbound: own.outbound + shared.outbound,
+  };
+}
+
 function outboundMovementsMap() {
   const map = new Map();
-  for (const movement of movements.filter((row) => row.type === "out")) {
+  for (const movement of movements.filter((row) => row.type === "out" && !row.shareByProduct)) {
     const key = `${movement.vendor}::${movement.productCode}`;
+    const current = map.get(key) || { qty: 0, lastDate: "" };
+    current.qty += Number(movement.qty || 0);
+    if (!current.lastDate || movement.date > current.lastDate) current.lastDate = movement.date;
+    map.set(key, current);
+  }
+  return map;
+}
+
+function sharedOutboundMovementsMap() {
+  const map = new Map();
+  for (const movement of movements.filter((row) => row.type === "out" && row.shareByProduct)) {
+    const key = stockKey(movement);
     const current = map.get(key) || { qty: 0, lastDate: "" };
     current.qty += Number(movement.qty || 0);
     if (!current.lastDate || movement.date > current.lastDate) current.lastDate = movement.date;
@@ -352,20 +404,30 @@ function baseDeliveryRows() {
 
 function deliveryProgressMap(records = baseDeliveryRows()) {
   const outboundByItem = outboundMovementsMap();
+  const outboundByProduct = sharedOutboundMovementsMap();
   const recordsByItem = new Map();
+  const recordsByProduct = new Map();
   for (const record of records) {
     const key = itemKey(record);
     const itemRecords = recordsByItem.get(key) || [];
     itemRecords.push(record);
     recordsByItem.set(key, itemRecords);
+
+    const productKey = stockKey(record);
+    const productRecords = recordsByProduct.get(productKey) || [];
+    productRecords.push(record);
+    recordsByProduct.set(productKey, productRecords);
   }
 
   const progress = new Map();
-  for (const [key, itemRecords] of recordsByItem.entries()) {
-    let remainingOutbound = outboundByItem.get(key)?.qty || 0;
-    const deliveredDate = outboundByItem.get(key)?.lastDate || "";
-    const sorted = [...itemRecords].sort((a, b) =>
-      (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99") || a.sourceRow - b.sourceRow,
+  for (const [key, productRecords] of recordsByProduct.entries()) {
+    let remainingOutbound = outboundByProduct.get(key)?.qty || 0;
+    if (!remainingOutbound) continue;
+    const deliveredDate = outboundByProduct.get(key)?.lastDate || "";
+    const sorted = [...productRecords].sort((a, b) =>
+      (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99")
+        || a.vendor.localeCompare(b.vendor, "ko")
+        || a.sourceRow - b.sourceRow,
     );
 
     for (const record of sorted) {
@@ -391,11 +453,45 @@ function deliveryProgressMap(records = baseDeliveryRows()) {
       });
     }
   }
+
+  for (const [key, itemRecords] of recordsByItem.entries()) {
+    let remainingOutbound = outboundByItem.get(key)?.qty || 0;
+    if (!remainingOutbound) continue;
+    const deliveredDate = outboundByItem.get(key)?.lastDate || "";
+    const sorted = [...itemRecords].sort((a, b) =>
+      (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99") || a.sourceRow - b.sourceRow,
+    );
+
+    for (const record of sorted) {
+      const existing = progress.get(record.id);
+      const originalQty = Number(existing?.remainingOrderQty ?? record.orderQty ?? 0);
+      if (isDelivered(record)) {
+        progress.set(record.id, {
+          shippedQty: 0,
+          remainingOrderQty: Number(record.orderQty || 0),
+          deliveredDate: record.deliveredDate,
+          productState: record.productState,
+        });
+        continue;
+      }
+
+      const shippedQty = Math.min(originalQty, remainingOutbound);
+      remainingOutbound -= shippedQty;
+      const remainingOrderQty = originalQty - shippedQty;
+      progress.set(record.id, {
+        shippedQty: Number(existing?.shippedQty || 0) + shippedQty,
+        remainingOrderQty,
+        deliveredDate: remainingOrderQty === 0 && shippedQty > 0 ? deliveredDate : record.deliveredDate,
+        productState: shippedQty > 0 ? (remainingOrderQty === 0 ? "납품완료" : "일부납품") : record.productState,
+      });
+    }
+  }
   return progress;
 }
 
 function rowsWithStock() {
   const movementTotals = movementTotalsMap();
+  const sharedMovementTotals = sharedMovementTotalsMap();
   const orderAdjustments = orderQtyAdjustmentMap();
   const baseRecords = baseDeliveryRows();
   const progressByRecord = deliveryProgressMap(baseRecords);
@@ -426,8 +522,19 @@ function rowsWithStock() {
       dueDates.set(key, dates);
     }
   }
+  function sharedOpenOrderQtyForItem(item) {
+    return baseRecords.reduce((sum, record) => {
+      if (!deliveryEdits[record.id]?.shareByProduct && !record.shareByProduct) return sum;
+      if (stockKey(record) !== stockKey(item) || itemKey(record) === itemKey(item) || isDelivered(record)) return sum;
+      const progress = progressByRecord.get(record.id);
+      const seedRecord = deliverySeed.find((source) => source.id === record.id);
+      if (seedRecord) return sum + (Number(record.orderQty || 0) - Number(seedRecord.orderQty || 0));
+      return sum + Number(progress?.remainingOrderQty ?? record.orderQty ?? 0);
+    }, 0);
+  }
+
   return inventoryRows().map((item) => {
-    const totals = movementTotals.get(itemKey(item)) || { inbound: 0, outbound: 0 };
+    const totals = movementTotalsForItem(item, movementTotals, sharedMovementTotals);
     const adjustment = totals.inbound - totals.outbound;
     const orderAdjustment = orderAdjustments.get(itemKey(item)) || 0;
     const storedBaseStock = Number(baseStockEdits[itemKey(item)] ?? item.baseStock ?? 0);
@@ -448,16 +555,17 @@ function rowsWithStock() {
     const fallbackOrderQty = Math.max(0, Number(item.orderQty || 0) + orderAdjustment - totals.outbound);
     const fallbackDeliveredQty = Math.min(Number(item.orderQty || 0) + orderAdjustment, totals.outbound);
     const orderQty = hasRecords ? openOrderQty : fallbackOrderQty;
+    const sharedOpenOrderQty = sharedOpenOrderQtyForItem(item);
     const dates = (dueDates.get(itemKey(item)) || []).sort();
     const displayRecords = deliveryStates.get(itemKey(item)) || [];
     const deliveredCount = displayRecords.filter(isDelivered).length;
     const hasPartial = displayRecords.some((record) => record.productState.includes("일부납품"));
     const allDeliveriesCompleted = hasRecords && displayRecords.length > 0 && deliveredCount === displayRecords.length && orderQty === 0;
     const available = allDeliveriesCompleted
-      ? baseStock - extraOutbound
+      ? baseStock - extraOutbound - sharedOpenOrderQty
       : hasRecords
-        ? baseStock - deliveredQty - orderQty - extraOutbound
-        : baseStock - fallbackDeliveredQty - orderQty - Math.max(0, totals.outbound - fallbackDeliveredQty);
+        ? baseStock - deliveredQty - orderQty - sharedOpenOrderQty - extraOutbound
+        : baseStock - fallbackDeliveredQty - orderQty - sharedOpenOrderQty - Math.max(0, totals.outbound - fallbackDeliveredQty);
     const stockStatus = available < 0 ? "부족" : available === 0 ? "소진" : "보유";
     const deliveryStatus = hasPartial || (deliveredCount > 0 && deliveredCount < displayRecords.length)
       ? "일부납품"
@@ -623,7 +731,13 @@ function render() {
 }
 
 function renderProductSearch(rows) {
-  const stockRows = new Map(rowsWithStock().map((row) => [itemKey(row), row]));
+  const stockRows = rowsWithStock();
+  const stockRowsByItem = new Map(stockRows.map((row) => [itemKey(row), row]));
+  const stockRowsByProduct = new Map();
+  for (const row of stockRows) {
+    if (!stockRowsByProduct.has(stockKey(row))) stockRowsByProduct.set(stockKey(row), row);
+  }
+  const stockForRecord = (row) => stockRowsByItem.get(itemKey(row)) || stockRowsByProduct.get(stockKey(row));
   const displayDate = (row) => row.deliveredDate || row.dueDate || "";
   const sorted = [...rows].sort((a, b) => {
     const left = displayDate(a);
@@ -639,8 +753,8 @@ function renderProductSearch(rows) {
     textCell(row.location),
     deliveryStatusBadge(row.productState),
     numCell(row.orderQty),
-    numCell(stockRows.get(itemKey(row))?.baseStock ?? 0),
-    numCell(stockRows.get(itemKey(row))?.available ?? row.currentStock),
+    numCell(stockForRecord(row)?.baseStock ?? 0),
+    numCell(stockForRecord(row)?.available ?? row.currentStock),
     textCell(row.dueDate),
     textCell(row.deliveredDate),
     textCell(row.remarks),
@@ -780,6 +894,7 @@ function addMovement(event) {
     qty,
     date: els.dateInput.value || today(),
     memo: els.memoInput.value.trim(),
+    shareByProduct: shouldShareProductStock(productCode),
     createdAt: new Date().toISOString(),
   });
   saveMovements();
@@ -984,6 +1099,7 @@ function registerProduct(event) {
     deliveredDate: "",
     remarks,
     specialNote,
+    shareByProduct: shouldShareProductStock(productCode),
     sourceSheet: "직접등록",
     sourceRow: customDeliveries.length + 1,
   });
@@ -1002,7 +1118,9 @@ function registerProduct(event) {
 function openDeliveryEditor(recordId) {
   const record = deliveryRows().find((row) => row.id === recordId);
   if (!record) return;
-  const stockItem = rowsWithStock().find((row) => row.vendor === record.vendor && row.productCode === record.productCode);
+  const stockRows = rowsWithStock();
+  const stockItem = stockRows.find((row) => row.vendor === record.vendor && row.productCode === record.productCode)
+    || stockRows.find((row) => stockKey(row) === stockKey(record));
   els.editRecordId.value = record.id;
   els.editVendor.textContent = record.vendor;
   els.editProductCode.textContent = record.productCode;
@@ -1026,8 +1144,8 @@ function saveDeliveryRecord(event) {
     alert("기존재고와 발주수량을 확인해주세요.");
     return;
   }
-  const inbound = movementTotalsMap().get(itemKey(record))?.inbound || 0;
-  baseStockEdits[itemKey(record)] = baseStock - inbound;
+  const sharedInbound = movementTotalsForItem(record).inbound;
+  baseStockEdits[itemKey(record)] = baseStock - sharedInbound;
   deliveryEdits[id] = {
     orderQty,
     productState: els.editProductState.value.trim(),
@@ -1035,6 +1153,7 @@ function saveDeliveryRecord(event) {
     deliveredDate: els.editDeliveredDate.value,
     specialNote: els.editSpecialNote.value.trim(),
     remarks: els.editRemarks.value.trim(),
+    shareByProduct: shouldShareProductStock(record.productCode),
   };
   saveDeliveryEdits();
   saveBaseStockEdits();
@@ -1103,6 +1222,7 @@ function saveStockChange(event) {
     qty,
     date: els.stockDate.value || today(),
     memo: els.stockMemo.value.trim(),
+    shareByProduct: shouldShareProductStock(productCode),
     createdAt: new Date().toISOString(),
   });
   saveMovements();
@@ -1165,11 +1285,20 @@ function currentExport() {
   }
   if (activeView === "product") {
     const rows = filteredProductRows();
-    const stockRows = new Map(rowsWithStock().map((row) => [itemKey(row), row]));
+    const stockRows = rowsWithStock();
+    const stockRowsByItem = new Map(stockRows.map((row) => [itemKey(row), row]));
+    const stockRowsByProduct = new Map();
+    for (const row of stockRows) {
+      if (!stockRowsByProduct.has(stockKey(row))) stockRowsByProduct.set(stockKey(row), row);
+    }
+    const stockForRecord = (row) => stockRowsByItem.get(itemKey(row)) || stockRowsByProduct.get(stockKey(row));
     return {
       name: "품번조회",
       header: ["업체", "품번", "소번지", "제품상태", "발주수량", "기존재고", "현재재고", "납기일자", "납품일자", "비고", "특이사항"],
-      rows: rows.map((row) => [row.vendor, row.productCode, row.location, row.productState, row.orderQty, stockRows.get(itemKey(row))?.baseStock ?? 0, stockRows.get(itemKey(row))?.available ?? row.currentStock, row.dueDate, row.deliveredDate, row.remarks, row.specialNote]),
+      rows: rows.map((row) => {
+        const stock = stockForRecord(row);
+        return [row.vendor, row.productCode, row.location, row.productState, row.orderQty, stock?.baseStock ?? 0, stock?.available ?? row.currentStock, row.dueDate, row.deliveredDate, row.remarks, row.specialNote];
+      }),
     };
   }
   if (activeView === "schedule" || activeView === "delivered") {
