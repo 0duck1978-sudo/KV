@@ -298,6 +298,18 @@ function movementTotalsMap() {
   return map;
 }
 
+function outboundMovementsMap() {
+  const map = new Map();
+  for (const movement of movements.filter((row) => row.type === "out")) {
+    const key = `${movement.vendor}::${movement.productCode}`;
+    const current = map.get(key) || { qty: 0, lastDate: "" };
+    current.qty += Number(movement.qty || 0);
+    if (!current.lastDate || movement.date > current.lastDate) current.lastDate = movement.date;
+    map.set(key, current);
+  }
+  return map;
+}
+
 function orderQtyAdjustmentMap() {
   const map = new Map();
   for (const record of [...deliverySeed, ...customDeliveries]) {
@@ -311,20 +323,84 @@ function orderQtyAdjustmentMap() {
   return map;
 }
 
+function baseDeliveryRows() {
+  return [...deliverySeed, ...customDeliveries]
+    .filter((record) => !deletedDeliveryIds.includes(record.id))
+    .filter((record) => !isDeleted(record.vendor, record.productCode))
+    .map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
+}
+
+function deliveryProgressMap(records = baseDeliveryRows()) {
+  const outboundByItem = outboundMovementsMap();
+  const recordsByItem = new Map();
+  for (const record of records) {
+    const key = itemKey(record);
+    const itemRecords = recordsByItem.get(key) || [];
+    itemRecords.push(record);
+    recordsByItem.set(key, itemRecords);
+  }
+
+  const progress = new Map();
+  for (const [key, itemRecords] of recordsByItem.entries()) {
+    let remainingOutbound = outboundByItem.get(key)?.qty || 0;
+    const deliveredDate = outboundByItem.get(key)?.lastDate || "";
+    const sorted = [...itemRecords].sort((a, b) =>
+      (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99") || a.sourceRow - b.sourceRow,
+    );
+
+    for (const record of sorted) {
+      const originalQty = Number(record.orderQty || 0);
+      if (isDelivered(record)) {
+        progress.set(record.id, {
+          shippedQty: 0,
+          remainingOrderQty: originalQty,
+          deliveredDate: record.deliveredDate,
+          productState: record.productState,
+        });
+        continue;
+      }
+
+      const shippedQty = Math.min(originalQty, remainingOutbound);
+      remainingOutbound -= shippedQty;
+      const remainingOrderQty = originalQty - shippedQty;
+      progress.set(record.id, {
+        shippedQty,
+        remainingOrderQty,
+        deliveredDate: remainingOrderQty === 0 && shippedQty > 0 ? deliveredDate : record.deliveredDate,
+        productState: shippedQty > 0 ? (remainingOrderQty === 0 ? "납품완료" : "일부납품") : record.productState,
+      });
+    }
+  }
+  return progress;
+}
+
 function rowsWithStock() {
   const movementTotals = movementTotalsMap();
   const orderAdjustments = orderQtyAdjustmentMap();
+  const baseRecords = baseDeliveryRows();
+  const progressByRecord = deliveryProgressMap(baseRecords);
+  const recordsByItem = new Map();
+  for (const record of baseRecords) {
+    const key = itemKey(record);
+    const records = recordsByItem.get(key) || [];
+    records.push(record);
+    recordsByItem.set(key, records);
+  }
   const dueDates = new Map();
   const deliveryStates = new Map();
-  for (const record of deliveryRows()) {
+  for (const record of baseRecords) {
     const key = itemKey(record);
-    const meaningful = Number(record.orderQty || 0) > 0 || record.dueDate || record.deliveredDate || record.productState;
+    const progress = progressByRecord.get(record.id);
+    const remainingOrderQty = progress?.remainingOrderQty ?? Number(record.orderQty || 0);
+    const effectiveState = progress?.productState || record.productState;
+    const effectiveDeliveredDate = progress?.deliveredDate || record.deliveredDate;
+    const meaningful = Number(record.orderQty || 0) > 0 || record.dueDate || effectiveDeliveredDate || effectiveState;
     if (meaningful) {
       const states = deliveryStates.get(key) || [];
-      states.push(record);
+      states.push({ ...record, orderQty: remainingOrderQty, productState: effectiveState, deliveredDate: effectiveDeliveredDate });
       deliveryStates.set(key, states);
     }
-    if (!isDelivered(record) && record.dueDate) {
+    if (!isDelivered({ ...record, productState: effectiveState, deliveredDate: effectiveDeliveredDate }) && remainingOrderQty > 0 && record.dueDate) {
       const dates = dueDates.get(key) || [];
       if (!dates.includes(record.dueDate)) dates.push(record.dueDate);
       dueDates.set(key, dates);
@@ -336,16 +412,34 @@ function rowsWithStock() {
     const orderAdjustment = orderAdjustments.get(itemKey(item)) || 0;
     const storedBaseStock = Number(baseStockEdits[itemKey(item)] ?? item.baseStock ?? 0);
     const baseStock = storedBaseStock + totals.inbound;
-    const orderQty = Number(item.orderQty || 0) + orderAdjustment;
-    const available = baseStock - orderQty - totals.outbound;
+    const records = recordsByItem.get(itemKey(item)) || [];
+    const hasRecords = records.length > 0;
+    const deliveredQty = records.reduce((sum, record) => {
+      const progress = progressByRecord.get(record.id);
+      return sum + (isDelivered(record) ? Number(record.orderQty || 0) : Number(progress?.shippedQty || 0));
+    }, 0);
+    const openOrderQty = records.reduce((sum, record) => {
+      if (isDelivered(record)) return sum;
+      const progress = progressByRecord.get(record.id);
+      return sum + Number(progress?.remainingOrderQty ?? record.orderQty ?? 0);
+    }, 0);
+    const originalOpenQty = records.reduce((sum, record) => sum + (isDelivered(record) ? 0 : Number(record.orderQty || 0)), 0);
+    const extraOutbound = Math.max(0, totals.outbound - originalOpenQty);
+    const fallbackOrderQty = Math.max(0, Number(item.orderQty || 0) + orderAdjustment - totals.outbound);
+    const fallbackDeliveredQty = Math.min(Number(item.orderQty || 0) + orderAdjustment, totals.outbound);
+    const orderQty = hasRecords ? openOrderQty : fallbackOrderQty;
+    const available = hasRecords
+      ? baseStock - deliveredQty - orderQty - extraOutbound
+      : baseStock - fallbackDeliveredQty - orderQty - Math.max(0, totals.outbound - fallbackDeliveredQty);
     const dates = (dueDates.get(itemKey(item)) || []).sort();
-    const records = deliveryStates.get(itemKey(item)) || [];
-    const deliveredCount = records.filter(isDelivered).length;
-    const hasPartial = records.some((record) => record.productState.includes("일부납품"));
+    const displayRecords = deliveryStates.get(itemKey(item)) || [];
+    const deliveredCount = displayRecords.filter(isDelivered).length;
+    const hasPartial = displayRecords.some((record) => record.productState.includes("일부납품"));
+    const allDeliveriesCompleted = hasRecords && displayRecords.length > 0 && deliveredCount === displayRecords.length && orderQty === 0;
     const stockStatus = available < 0 ? "부족" : available === 0 ? "소진" : "보유";
-    const deliveryStatus = hasPartial || (deliveredCount > 0 && deliveredCount < records.length)
+    const deliveryStatus = hasPartial || (deliveredCount > 0 && deliveredCount < displayRecords.length)
       ? "일부납품"
-      : records.length > 0 && deliveredCount === records.length
+      : displayRecords.length > 0 && deliveredCount === displayRecords.length
         ? "납품"
         : stockStatus;
     return {
@@ -357,15 +451,26 @@ function rowsWithStock() {
       dueDate: dates.length ? `${dates[0]}${dates.length > 1 ? " 외" : ""}` : "",
       shortage: available < 0 ? Math.abs(available) : 0,
       status: deliveryStatus,
+      hasOpenOrder: orderQty > 0,
+      allDeliveriesCompleted,
     };
   });
 }
 
 function deliveryRows() {
-  return [...deliverySeed, ...customDeliveries]
-    .filter((record) => !deletedDeliveryIds.includes(record.id))
-    .filter((record) => !isDeleted(record.vendor, record.productCode))
-    .map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
+  const records = baseDeliveryRows();
+  const progressByRecord = deliveryProgressMap(records);
+  return records.map((record) => {
+    if (isDelivered(record)) return record;
+    const progress = progressByRecord.get(record.id);
+    if (!progress || progress.shippedQty <= 0) return record;
+    return {
+      ...record,
+      orderQty: progress.remainingOrderQty,
+      productState: progress.productState,
+      deliveredDate: progress.deliveredDate,
+    };
+  });
 }
 
 function isDelivered(record) {
@@ -396,7 +501,7 @@ function updateProductList() {
 }
 
 function renderMetrics() {
-  const rows = rowsWithStock();
+  const rows = visibleStockRows();
   els.metricProducts.textContent = fmtNum(rows.length);
   els.metricVendors.textContent = fmtNum(allVendors().length);
   els.metricShortages.textContent = fmtNum(rows.filter((row) => row.available < 0).length);
@@ -411,8 +516,12 @@ function matchesFilter(row, fields) {
   return vendorOk && (!query || text.includes(query));
 }
 
+function visibleStockRows() {
+  return rowsWithStock().filter((row) => !row.allDeliveriesCompleted);
+}
+
 function filteredStockRows() {
-  return rowsWithStock().filter((row) => matchesFilter(row, ["productCode", "location", "note"]));
+  return visibleStockRows().filter((row) => matchesFilter(row, ["productCode", "location", "note"]));
 }
 
 function filteredDeliveryRows() {
