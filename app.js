@@ -518,12 +518,13 @@ function matchesFilter(row, fields) {
   return vendorOk && (!query || text.includes(query));
 }
 
-function visibleStockRows() {
-  return rowsWithStock().filter((row) => !row.allDeliveriesCompleted);
+function visibleStockRows(includeCompleted = false) {
+  return rowsWithStock().filter((row) => includeCompleted || !row.allDeliveriesCompleted);
 }
 
 function filteredStockRows() {
-  return visibleStockRows().filter((row) => matchesFilter(row, ["productCode", "location", "note"]));
+  const hasSearch = Boolean(els.searchInput.value.trim());
+  return visibleStockRows(hasSearch).filter((row) => matchesFilter(row, ["productCode", "location", "note"]));
 }
 
 function filteredDeliveryRows() {
