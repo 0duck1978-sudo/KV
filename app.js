@@ -580,11 +580,9 @@ function rowsWithStock() {
     const hasSameProductPacked = sameProductOpenRecords.some((record) => isPacked(record));
     const hasSameProductOpen = sameProductOpenRecords.length > 0;
     const allDeliveriesCompleted = hasRecords && displayRecords.length > 0 && deliveredCount === displayRecords.length && orderQty === 0 && !hasSameProductOpen;
-    const available = allDeliveriesCompleted
-      ? baseStock - extraOutbound - sharedOpenOrderQty
-      : hasRecords
-        ? baseStock - deliveredQty - orderQty - sharedOpenOrderQty - extraOutbound
-        : baseStock - fallbackDeliveredQty - orderQty - sharedOpenOrderQty - Math.max(0, totals.outbound - fallbackDeliveredQty);
+    const available = hasRecords
+      ? baseStock - deliveredQty - orderQty - sharedOpenOrderQty - extraOutbound
+      : baseStock - fallbackDeliveredQty - orderQty - sharedOpenOrderQty - Math.max(0, totals.outbound - fallbackDeliveredQty);
     const stockStatus = available < 0 ? "부족" : available === 0 ? "소진" : "보유";
     const deliveryStatus = hasPartial || (deliveredCount > 0 && deliveredCount < displayRecords.length)
       ? "일부납품"
@@ -599,6 +597,7 @@ function rowsWithStock() {
       ...item,
       baseStock,
       orderQty,
+      deliveredQty: hasRecords ? deliveredQty : fallbackDeliveredQty,
       adjustment,
       available,
       dueDate: dates.length ? `${dates[0]}${dates.length > 1 ? " 외" : ""}` : "",
@@ -615,12 +614,13 @@ function deliveryRows() {
   const records = baseDeliveryRows();
   const progressByRecord = deliveryProgressMap(records);
   return records.map((record) => {
-    if (isDelivered(record)) return record;
+    if (isDelivered(record)) return { ...record, shippedQty: Number(record.orderQty || 0) };
     const progress = progressByRecord.get(record.id);
-    if (!progress || progress.shippedQty <= 0) return record;
+    if (!progress || progress.shippedQty <= 0) return { ...record, shippedQty: 0 };
     return {
       ...record,
       orderQty: progress.remainingOrderQty,
+      shippedQty: progress.shippedQty,
       productState: progress.productState,
       deliveredDate: progress.deliveredDate,
     };
@@ -779,13 +779,14 @@ function renderProductSearch(rows) {
     if (left && !right) return -1;
     return left.localeCompare(right) || a.vendor.localeCompare(b.vendor, "ko") || a.sourceRow - b.sourceRow;
   });
-  setHead(["업체", "품번", "소번지", "제품상태", "발주수량", "기존재고", "현재재고", "납기일자", "납품일자", "비고", "특이사항", "재고변경", "수정"]);
+  setHead(["업체", "품번", "소번지", "제품상태", "발주수량", "납품수량", "기존재고", "현재재고", "납기일자", "납품일자", "비고", "특이사항", "재고변경", "수정"]);
   setBody(sorted, (row) => [
     textCell(row.vendor),
     productLink(row.productCode),
     textCell(row.location),
     deliveryStatusBadge(row.productState),
     numCell(row.orderQty),
+    numCell(row.shippedQty || 0),
     numCell(stockForRecord(row)?.baseStock ?? 0),
     numCell(stockForRecord(row)?.available ?? row.currentStock),
     textCell(row.dueDate),
@@ -801,13 +802,14 @@ function renderProductSearch(rows) {
 }
 
 function renderStock(rows) {
-  setHead(["업체", "품번", "소번지", "기존재고", "발주수량", "현재재고", "납기일자", "상태", "특이사항"]);
+  setHead(["업체", "품번", "소번지", "기존재고", "발주수량", "납품수량", "현재재고", "납기일자", "상태", "특이사항"]);
   setBody(rows, (row) => [
     textCell(row.vendor),
     productLink(row.productCode),
     textCell(row.location),
     numCell(row.baseStock),
     numCell(row.orderQty),
+    numCell(row.deliveredQty),
     numCell(row.available),
     textCell(row.dueDate),
     statusBadge(row.status),
@@ -816,13 +818,14 @@ function renderStock(rows) {
 }
 
 function renderShortage(rows) {
-  setHead(["업체", "품번", "소번지", "부족수량", "발주수량", "현재재고", "재고확인날짜", "특이사항"]);
+  setHead(["업체", "품번", "소번지", "부족수량", "발주수량", "납품수량", "현재재고", "재고확인날짜", "특이사항"]);
   setBody(rows.sort((a, b) => b.shortage - a.shortage), (row) => [
     textCell(row.vendor),
     productLink(row.productCode),
     textCell(row.location),
     numCell(row.shortage),
     numCell(row.orderQty),
+    numCell(row.deliveredQty),
     numCell(row.available),
     textCell(row.checkedDate),
     textCell(row.note),
@@ -835,12 +838,13 @@ function renderDelivery(rows, completedOnly) {
     const right = completedOnly ? b.deliveredDate : b.dueDate;
     return (right || "0000-00-00").localeCompare(left || "0000-00-00") || a.vendor.localeCompare(b.vendor, "ko");
   });
-  setHead(["업체", "품번", "제품상태", "발주수량", "납기일자", "납품일자", "비고", "특이사항", "수정"]);
+  setHead(["업체", "품번", "제품상태", "발주수량", "납품수량", "납기일자", "납품일자", "비고", "특이사항", "수정"]);
   setBody(sorted, (row) => [
     textCell(row.vendor),
     productLink(row.productCode),
     deliveryStatusBadge(row.productState),
     numCell(row.orderQty),
+    numCell(row.shippedQty || 0),
     textCell(row.dueDate),
     textCell(row.deliveredDate),
     textCell(row.remarks),
@@ -1309,11 +1313,11 @@ function currentExport() {
     return {
       name: activeView === "shortage" ? "부족현황" : "재고현황",
       header: activeView === "shortage"
-        ? ["업체", "품번", "소번지", "부족수량", "발주수량", "현재재고", "재고확인날짜", "특이사항"]
-        : ["업체", "품번", "소번지", "기존재고", "발주수량", "현재재고", "납기일자", "상태", "특이사항"],
+        ? ["업체", "품번", "소번지", "부족수량", "발주수량", "납품수량", "현재재고", "재고확인날짜", "특이사항"]
+        : ["업체", "품번", "소번지", "기존재고", "발주수량", "납품수량", "현재재고", "납기일자", "상태", "특이사항"],
       rows: activeView === "shortage"
-        ? exportRows.map(({ stock, record }) => [stock.vendor, stock.productCode, stock.location, stock.shortage, record?.orderQty ?? stock.orderQty, stock.available, stock.checkedDate, record?.specialNote || stock.note])
-        : exportRows.map(({ stock, record }) => [stock.vendor, stock.productCode, stock.location, stock.baseStock, record?.orderQty ?? stock.orderQty, stock.available, record?.dueDate ?? stock.dueDate, exportRecordStatus(stock, record), record?.specialNote || stock.note]),
+        ? exportRows.map(({ stock, record }) => [stock.vendor, stock.productCode, stock.location, stock.shortage, record?.orderQty ?? stock.orderQty, record?.shippedQty ?? stock.deliveredQty, stock.available, stock.checkedDate, record?.specialNote || stock.note])
+        : exportRows.map(({ stock, record }) => [stock.vendor, stock.productCode, stock.location, stock.baseStock, record?.orderQty ?? stock.orderQty, record?.shippedQty ?? stock.deliveredQty, stock.available, record?.dueDate ?? stock.dueDate, exportRecordStatus(stock, record), record?.specialNote || stock.note]),
     };
   }
   if (activeView === "product") {
@@ -1327,10 +1331,10 @@ function currentExport() {
     const stockForRecord = (row) => stockRowsByItem.get(itemKey(row)) || stockRowsByProduct.get(stockKey(row));
     return {
       name: "품번조회",
-      header: ["업체", "품번", "소번지", "제품상태", "발주수량", "기존재고", "현재재고", "납기일자", "납품일자", "비고", "특이사항"],
+      header: ["업체", "품번", "소번지", "제품상태", "발주수량", "납품수량", "기존재고", "현재재고", "납기일자", "납품일자", "비고", "특이사항"],
       rows: rows.map((row) => {
         const stock = stockForRecord(row);
-        return [row.vendor, row.productCode, row.location, row.productState, row.orderQty, stock?.baseStock ?? 0, stock?.available ?? row.currentStock, row.dueDate, row.deliveredDate, row.remarks, row.specialNote];
+        return [row.vendor, row.productCode, row.location, row.productState, row.orderQty, row.shippedQty || 0, stock?.baseStock ?? 0, stock?.available ?? row.currentStock, row.dueDate, row.deliveredDate, row.remarks, row.specialNote];
       }),
     };
   }
@@ -1340,8 +1344,8 @@ function currentExport() {
     if (activeView === "delivered") rows = rows.filter(isDeliveryMenuItem);
     return {
       name: activeView === "delivered" ? "납품완료" : activeView === "packed" ? "포장완료" : "납품납기조회",
-      header: ["업체", "품번", "제품상태", "발주수량", "납기일자", "납품일자", "비고", "특이사항", "원본시트"],
-      rows: rows.map((row) => [row.vendor, row.productCode, row.productState, row.orderQty, row.dueDate, row.deliveredDate, row.remarks, row.specialNote, row.sourceSheet]),
+      header: ["업체", "품번", "제품상태", "발주수량", "납품수량", "납기일자", "납품일자", "비고", "특이사항", "원본시트"],
+      rows: rows.map((row) => [row.vendor, row.productCode, row.productState, row.orderQty, row.shippedQty || 0, row.dueDate, row.deliveredDate, row.remarks, row.specialNote, row.sourceSheet]),
     };
   }
   const rows = filteredMovements();
