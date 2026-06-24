@@ -659,6 +659,10 @@ function isDelivered(record) {
   return record.productState.includes("납품완료") || Boolean(record.deliveredDate);
 }
 
+function isDeliveryMenuItem(record) {
+  return String(record.productState || "").includes("납품") || Boolean(record.deliveredDate);
+}
+
 function isPacked(record) {
   return String(record.productState || "").includes("포장");
 }
@@ -755,7 +759,7 @@ function render() {
   if (activeView === "product") renderProductSearch(filteredProductRows());
   if (activeView === "schedule") renderDelivery(records, false);
   if (activeView === "packed") renderDelivery(records.filter(isPacked), false);
-  if (activeView === "delivered") renderDelivery(records.filter(isDelivered), true);
+  if (activeView === "delivered") renderDelivery(records.filter(isDeliveryMenuItem), true);
   if (activeView === "history") renderMovements(filteredMovements());
 }
 
@@ -1333,7 +1337,7 @@ function currentExport() {
   if (activeView === "schedule" || activeView === "packed" || activeView === "delivered") {
     let rows = filteredDeliveryRows();
     if (activeView === "packed") rows = rows.filter(isPacked);
-    if (activeView === "delivered") rows = rows.filter(isDelivered);
+    if (activeView === "delivered") rows = rows.filter(isDeliveryMenuItem);
     return {
       name: activeView === "delivered" ? "납품완료" : activeView === "packed" ? "포장완료" : "납품납기조회",
       header: ["업체", "품번", "제품상태", "발주수량", "납기일자", "납품일자", "비고", "특이사항", "원본시트"],
