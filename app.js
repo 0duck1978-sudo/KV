@@ -522,6 +522,22 @@ function rowsWithStock() {
       dueDates.set(key, dates);
     }
   }
+  function sameProductOpenRecordsForItem(item) {
+    return baseRecords
+      .map((record) => {
+        const progress = progressByRecord.get(record.id);
+        return {
+          ...record,
+          orderQty: progress?.remainingOrderQty ?? Number(record.orderQty || 0),
+          productState: progress?.productState || record.productState,
+          deliveredDate: progress?.deliveredDate || record.deliveredDate,
+        };
+      })
+      .filter((record) => stockKey(record) === stockKey(item))
+      .filter((record) => itemKey(record) !== itemKey(item))
+      .filter((record) => !isDelivered(record) && Number(record.orderQty || 0) > 0);
+  }
+
   function sharedOpenOrderQtyForItem(item) {
     return baseRecords.reduce((sum, record) => {
       if (!deliveryEdits[record.id]?.shareByProduct && !record.shareByProduct) return sum;
@@ -560,7 +576,10 @@ function rowsWithStock() {
     const displayRecords = deliveryStates.get(itemKey(item)) || [];
     const deliveredCount = displayRecords.filter(isDelivered).length;
     const hasPartial = displayRecords.some((record) => record.productState.includes("일부납품"));
-    const allDeliveriesCompleted = hasRecords && displayRecords.length > 0 && deliveredCount === displayRecords.length && orderQty === 0;
+    const sameProductOpenRecords = sameProductOpenRecordsForItem(item);
+    const hasSameProductPacked = sameProductOpenRecords.some((record) => isPacked(record));
+    const hasSameProductOpen = sameProductOpenRecords.length > 0;
+    const allDeliveriesCompleted = hasRecords && displayRecords.length > 0 && deliveredCount === displayRecords.length && orderQty === 0 && !hasSameProductOpen;
     const available = allDeliveriesCompleted
       ? baseStock - extraOutbound - sharedOpenOrderQty
       : hasRecords
@@ -569,9 +588,13 @@ function rowsWithStock() {
     const stockStatus = available < 0 ? "부족" : available === 0 ? "소진" : "보유";
     const deliveryStatus = hasPartial || (deliveredCount > 0 && deliveredCount < displayRecords.length)
       ? "일부납품"
-      : displayRecords.length > 0 && deliveredCount === displayRecords.length
-        ? "납품"
-        : stockStatus;
+      : hasSameProductPacked
+        ? "포장완료"
+        : hasSameProductOpen
+          ? "미납있음"
+          : displayRecords.length > 0 && deliveredCount === displayRecords.length
+            ? "납품"
+            : stockStatus;
     return {
       ...item,
       baseStock,
@@ -583,6 +606,7 @@ function rowsWithStock() {
       status: deliveryStatus,
       hasOpenOrder: orderQty > 0,
       allDeliveriesCompleted,
+      hasSameProductOpen,
     };
   });
 }
@@ -633,6 +657,10 @@ function applyOneTimeStockCorrections() {
 
 function isDelivered(record) {
   return record.productState.includes("납품완료") || Boolean(record.deliveredDate);
+}
+
+function isPacked(record) {
+  return !isDelivered(record) && record.productState.includes("포장완료");
 }
 
 function populateSelects() {
@@ -726,6 +754,7 @@ function render() {
   if (activeView === "shortage") renderShortage(stockRows.filter((row) => row.available < 0));
   if (activeView === "product") renderProductSearch(filteredProductRows());
   if (activeView === "schedule") renderDelivery(records, false);
+  if (activeView === "packed") renderDelivery(records.filter(isPacked), false);
   if (activeView === "delivered") renderDelivery(records.filter(isDelivered), true);
   if (activeView === "history") renderMovements(filteredMovements());
 }
@@ -1301,11 +1330,12 @@ function currentExport() {
       }),
     };
   }
-  if (activeView === "schedule" || activeView === "delivered") {
+  if (activeView === "schedule" || activeView === "packed" || activeView === "delivered") {
     let rows = filteredDeliveryRows();
+    if (activeView === "packed") rows = rows.filter(isPacked);
     if (activeView === "delivered") rows = rows.filter(isDelivered);
     return {
-      name: activeView === "delivered" ? "납품완료" : "납품납기조회",
+      name: activeView === "delivered" ? "납품완료" : activeView === "packed" ? "포장완료" : "납품납기조회",
       header: ["업체", "품번", "제품상태", "발주수량", "납기일자", "납품일자", "비고", "특이사항", "원본시트"],
       rows: rows.map((row) => [row.vendor, row.productCode, row.productState, row.orderQty, row.dueDate, row.deliveredDate, row.remarks, row.specialNote, row.sourceSheet]),
     };
