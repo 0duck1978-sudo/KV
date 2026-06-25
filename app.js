@@ -651,16 +651,14 @@ function rowsWithStock() {
     const shortageDemand = Math.max(0, orderQty - packedOpenQty);
     const shortage = Math.max(0, shortageDemand - available);
     const stockStatus = shortage > 0 ? "부족" : hasPacked ? "포장완료" : orderQty > 0 ? "포장가능" : available === 0 ? "소진" : "보유";
-    const canPackOpenOrder = stockStatus === "포장가능";
-    const deliveryStatus = hasPartial || (deliveredCount > 0 && deliveredCount < displayRecords.length)
-      ? `일부납품${canPackOpenOrder ? ", 포장가능" : ""}`
-      : hasPacked || hasSameProductPacked
-        ? "포장완료"
-        : hasSameProductOpen
-          ? "미납있음"
-          : displayRecords.length > 0 && deliveredCount === displayRecords.length
-            ? `납품${canPackOpenOrder ? ", 포장가능" : ""}`
-            : stockStatus;
+    const statusParts = [];
+    if (hasPartial || (deliveredCount > 0 && deliveredCount < displayRecords.length)) statusParts.push("일부납품");
+    else if (displayRecords.length > 0 && deliveredCount === displayRecords.length) statusParts.push("납품");
+    else if (hasSameProductOpen) statusParts.push("미납있음");
+    if (stockStatus === "포장가능") statusParts.push("포장가능");
+    if (hasPacked || hasSameProductPacked) statusParts.push("포장완료");
+    if (!statusParts.length) statusParts.push(stockStatus);
+    const deliveryStatus = combineStatuses(statusParts);
     return {
       ...item,
       baseStock,
@@ -959,14 +957,31 @@ function numCell(value) {
 }
 
 function statusBadge(status) {
-  const cls = status === "부족" ? "bad" : status === "소진" || status === "일부납품" ? "warn" : "good";
-  return `<span class="badge ${cls}">${escapeHtml(status)}</span>`;
+  return statusBadges(status);
 }
 
 function deliveryStatusBadge(status) {
   if (!status) return "";
-  const cls = status.includes("납품완료") ? "good" : status.includes("완료") || status.includes("준비") ? "warn" : "bad";
-  return `<span class="badge ${cls}">${escapeHtml(status)}</span>`;
+  return statusBadges(status);
+}
+
+function statusBadges(status) {
+  return splitStatuses(status)
+    .map((part) => `<span class="badge ${statusClass(part)}">${escapeHtml(part)}</span>`)
+    .join("");
+}
+
+function splitStatuses(status) {
+  return String(status || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function statusClass(status) {
+  if (status === "부족") return "bad";
+  if (status === "소진" || status === "일부납품" || status === "미납있음") return "warn";
+  return "good";
 }
 
 function escapeHtml(value) {
@@ -1416,24 +1431,35 @@ function expandedStockExportRows(stockRows) {
   });
 }
 
+function combineStatuses(parts) {
+  return [...new Set(parts.filter(Boolean))].join(", ");
+}
+
 function productSearchRecordStatus(stock, record) {
   if (!record) return stock?.status || "";
   if (!stock) return record.productState || "";
   if (stock.shortage > 0 && Number(record.orderQty || 0) > 0) return "부족";
   const canPack = Number(record.orderQty || 0) > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= Number(record.orderQty || 0);
-  if (record.productState.includes("일부납품")) return `일부납품${canPack ? ", 포장가능" : ""}`;
-  if (isDelivered(record)) return "납품";
-  if (record.productState) return `${record.productState}${canPack && !record.productState.includes("포장가능") ? ", 포장가능" : ""}`;
-  return canPack ? "포장가능" : "";
+  const statuses = [];
+  if (record.productState.includes("일부납품")) statuses.push("일부납품");
+  else if (isDelivered(record)) statuses.push("납품");
+  else if (record.productState) statuses.push(record.productState);
+  if (canPack) statuses.push("포장가능");
+  if (isPacked(record)) statuses.push("포장완료");
+  return combineStatuses(statuses);
 }
 
 function exportRecordStatus(stock, record) {
   if (!record) return stock.status;
   if (stock.shortage > 0) return "부족";
   const canPack = Number(record.orderQty || stock.orderQty || 0) > 0;
-  if (record.productState.includes("일부납품")) return `일부납품${canPack ? ", 포장가능" : ""}`;
-  if (isDelivered(record)) return `납품${canPack ? ", 포장가능" : ""}`;
-  return canPack ? "포장가능" : stock.available === 0 ? "소진" : "보유";
+  const statuses = [];
+  if (record.productState.includes("일부납품")) statuses.push("일부납품");
+  else if (isDelivered(record)) statuses.push("납품");
+  else if (record.productState) statuses.push(record.productState);
+  if (canPack) statuses.push("포장가능");
+  if (isPacked(record)) statuses.push("포장완료");
+  return statuses.length ? combineStatuses(statuses) : stock.available === 0 ? "소진" : "보유";
 }
 
 function currentExport() {
