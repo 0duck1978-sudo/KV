@@ -853,7 +853,7 @@ function renderProductSearch(rows) {
     textCell(row.vendor),
     productLink(row.productCode),
     textCell(row.location),
-    deliveryStatusBadge(row.productState),
+    deliveryStatusBadge(productSearchRecordStatus(stockForRecord(row), row)),
     numCell(row.orderQty),
     numCell(row.shippedQty || 0),
     numCell(stockForRecord(row)?.baseStock ?? 0),
@@ -1416,6 +1416,17 @@ function expandedStockExportRows(stockRows) {
   });
 }
 
+function productSearchRecordStatus(stock, record) {
+  if (!record) return stock?.status || "";
+  if (!stock) return record.productState || "";
+  if (stock.shortage > 0 && Number(record.orderQty || 0) > 0) return "부족";
+  const canPack = Number(record.orderQty || 0) > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= Number(record.orderQty || 0);
+  if (record.productState.includes("일부납품")) return `일부납품${canPack ? ", 포장가능" : ""}`;
+  if (isDelivered(record)) return "납품";
+  if (record.productState) return `${record.productState}${canPack && !record.productState.includes("포장가능") ? ", 포장가능" : ""}`;
+  return canPack ? "포장가능" : "";
+}
+
 function exportRecordStatus(stock, record) {
   if (!record) return stock.status;
   if (stock.shortage > 0) return "부족";
@@ -1449,7 +1460,7 @@ function currentExport() {
       header: ["업체", "품번", "소번지", "제품상태", "발주수량", "납품수량", "기존재고", "현재재고", "부족수량", "납기일자", "납품일자", "비고", "특이사항"],
       rows: rows.map((row) => {
         const stock = stockForRecord(row);
-        return [row.vendor, row.productCode, row.location, row.productState, row.orderQty, row.shippedQty || 0, stock?.baseStock ?? 0, stock?.available ?? row.currentStock, stock?.shortage ?? 0, row.dueDate, row.deliveredDate, row.remarks, row.specialNote];
+        return [row.vendor, row.productCode, row.location, productSearchRecordStatus(stock, row), row.orderQty, row.shippedQty || 0, stock?.baseStock ?? 0, stock?.available ?? row.currentStock, stock?.shortage ?? 0, row.dueDate, row.deliveredDate, row.remarks, row.specialNote];
       }),
     };
   }
