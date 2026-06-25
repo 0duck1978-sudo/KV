@@ -1143,31 +1143,31 @@ function registerProduct(event) {
     alert("초기재고와 발주수량을 확인해주세요.");
     return;
   }
-  if (inventoryRows().some((row) => row.vendor === vendor && row.productCode.toLowerCase() === productCode.toLowerCase())) {
-    alert("해당 업체에 이미 등록된 품번입니다.");
-    return;
-  }
+  const existingProduct = inventoryRows().find((row) => row.vendor === vendor && row.productCode.toLowerCase() === productCode.toLowerCase());
 
-  const currentStock = initialStock - orderQty;
-  customProducts.push({
-    id: makeId("product"),
-    seq: "",
-    productCode,
-    location,
-    baseStock: initialStock,
-    orderQty,
-    currentStock,
-    vendor,
-    note: specialNote,
-    finishedQty: 0,
-    stockInput: initialStock,
-    checkedDate: today(),
-  });
+  const finalLocation = existingProduct?.location || location;
+  const currentStock = existingProduct ? Number(existingProduct.currentStock || 0) - orderQty : initialStock - orderQty;
+  if (!existingProduct) {
+    customProducts.push({
+      id: makeId("product"),
+      seq: "",
+      productCode,
+      location,
+      baseStock: initialStock,
+      orderQty,
+      currentStock,
+      vendor,
+      note: specialNote,
+      finishedQty: 0,
+      stockInput: initialStock,
+      checkedDate: today(),
+    });
+  }
   customDeliveries.push({
     id: makeId("delivery"),
     vendor,
     productCode,
-    location,
+    location: finalLocation,
     orderQty,
     productState: "",
     currentStock,
@@ -1191,7 +1191,7 @@ function registerProduct(event) {
   render();
   const stock = stockSnapshot(vendor, productCode);
   sendInventoryAlert({
-    kind: orderQty > 0 ? "새 제품/발주 등록" : "새 제품 등록",
+    kind: existingProduct ? "새 발주 등록" : (orderQty > 0 ? "새 제품/발주 등록" : "새 제품 등록"),
     vendor,
     productCode,
     qty: orderQty,
