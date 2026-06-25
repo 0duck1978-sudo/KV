@@ -299,6 +299,43 @@ textarea:focus {
   grid-template-columns: 180px 300px;
 }
 
+.search-field {
+  position: relative;
+}
+
+.search-field input {
+  padding-right: 38px;
+}
+
+.clear-search-btn {
+  align-items: center;
+  background: #eef2f7;
+  border: 1px solid #c7ceda;
+  border-radius: 50%;
+  color: #5f6f86;
+  cursor: pointer;
+  display: flex;
+  font-size: 18px;
+  height: 24px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+}
+
+.clear-search-btn:hover {
+  background: #dfe7f1;
+  color: #253043;
+}
+
+.clear-search-btn[hidden] {
+  display: none;
+}
+
 .history-date-filters {
   align-items: end;
   display: grid;
