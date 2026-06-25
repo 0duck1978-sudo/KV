@@ -1453,7 +1453,7 @@ function productSearchRecordStatus(stock, record) {
   if (!record) return stock?.status || "";
   if (!stock) return record.productState || "";
   if (stock.shortage > 0 && Number(record.orderQty || 0) > 0) return "부족";
-  const canPack = Number(record.orderQty || 0) > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= Number(record.orderQty || 0);
+  const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || 0) > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= Number(record.orderQty || 0);
   const statuses = [];
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
   else if (isDelivered(record)) statuses.push("납품");
@@ -1466,7 +1466,7 @@ function productSearchRecordStatus(stock, record) {
 function exportRecordStatus(stock, record) {
   if (!record) return stock.status;
   if (stock.shortage > 0) return "부족";
-  const canPack = Number(record.orderQty || stock.orderQty || 0) > 0;
+  const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || stock.orderQty || 0) > 0;
   const statuses = [];
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
   else if (isDelivered(record)) statuses.push("납품");
