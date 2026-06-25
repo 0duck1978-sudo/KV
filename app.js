@@ -977,6 +977,7 @@ function addMovement(event) {
   els.qtyInput.value = "";
   els.memoInput.value = "";
   render();
+  notifyMovement(movements[movements.length - 1]);
 }
 
 function makeId(prefix) {
