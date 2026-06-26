@@ -592,7 +592,7 @@ function rowsWithStock() {
   function committedQtyForRecord(record) {
     const effective = effectiveDeliveryRecord(record);
     if (isDelivered(effective)) return Number(record.orderQty || 0);
-    if (isPacked(effective) || isPacked(record)) return Number(effective.shippedQty || 0) + Number(effective.orderQty || 0);
+    if (isFullyPacked(effective) || isFullyPacked(record)) return Number(effective.shippedQty || 0) + Number(effective.orderQty || 0);
     return Number(effective.shippedQty || 0);
   }
 
@@ -632,7 +632,7 @@ function rowsWithStock() {
     const dates = (dueDates.get(itemKey(item)) || []).sort();
     const displayRecords = deliveryStates.get(itemKey(item)) || [];
     const packedOpenQty = displayRecords.reduce((sum, record) => (
-      !isDelivered(record) && isPacked(record) ? sum + Number(record.orderQty || 0) : sum
+      !isDelivered(record) && isFullyPacked(record) ? sum + Number(record.orderQty || 0) : sum
     ), 0);
     const committedQty = hasRecords
       ? records.reduce((sum, record) => sum + committedQtyForRecord(record), 0)
@@ -640,16 +640,16 @@ function rowsWithStock() {
     const sharedCommittedQty = sharedCommittedQtyForItem(item);
     const deliveredCount = displayRecords.filter(isDelivered).length;
     const hasPartial = displayRecords.some((record) => record.productState.includes("일부납품"));
-    const hasPacked = displayRecords.some((record) => !isDelivered(record) && isPacked(record));
+    const hasPacked = displayRecords.some((record) => !isDelivered(record) && isFullyPacked(record));
     const sameProductOpenRecords = sameProductOpenRecordsForItem(item);
-    const hasSameProductPacked = sameProductOpenRecords.some((record) => isPacked(record));
+    const hasSameProductPacked = sameProductOpenRecords.some((record) => isFullyPacked(record));
     const hasSameProductOpen = sameProductOpenRecords.length > 0;
     const allDeliveriesCompleted = hasRecords && displayRecords.length > 0 && deliveredCount === displayRecords.length && orderQty === 0 && !hasSameProductOpen;
     const available = hasRecords
       ? baseStock - committedQty - sharedCommittedQty - extraOutbound
       : baseStock - displayDeliveredQty;
     const shortageDemand = Math.max(0, orderQty - packedOpenQty);
-    const shortage = Math.max(0, shortageDemand - available);
+    const shortage = Math.max(0, shortageDemand - Math.max(0, available));
     const hasUnpackedOpenOrder = shortageDemand > 0;
     const stockStatus = shortage > 0 ? "부족" : hasUnpackedOpenOrder ? "포장가능" : hasPacked ? "포장완료" : available === 0 ? "소진" : "보유";
     const statusParts = [];
@@ -723,7 +723,7 @@ function applyOneTimeStockCorrections() {
 }
 
 function isDelivered(record) {
-  return record.productState.includes("납품완료") || Boolean(record.deliveredDate);
+  return record.productState.includes("납품완료") || (Boolean(record.deliveredDate) && !isPartialDelivered(record));
 }
 
 function isDeliveryMenuItem(record) {
@@ -732,6 +732,18 @@ function isDeliveryMenuItem(record) {
 
 function isPacked(record) {
   return String(record.productState || "").includes("포장");
+}
+
+function isFullyPacked(record) {
+  return isPacked(record) && !isPartialPacked(record);
+}
+
+function isPartialDelivered(record) {
+  return String(record.productState || "").includes("일부납품");
+}
+
+function isPartialPacked(record) {
+  return String(record.productState || "").includes("일부포장");
 }
 
 function populateSelects() {
@@ -1452,27 +1464,27 @@ function combineStatuses(parts) {
 function productSearchRecordStatus(stock, record) {
   if (!record) return stock?.status || "";
   if (!stock) return record.productState || "";
-  if (stock.shortage > 0 && Number(record.orderQty || 0) > 0) return "부족";
   const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || 0) > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= Number(record.orderQty || 0);
   const statuses = [];
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
   else if (isDelivered(record)) statuses.push("납품");
   else if (record.productState) statuses.push(record.productState);
+  if (!statuses.length && stock.shortage > 0 && Number(record.orderQty || 0) > 0) statuses.push("부족");
   if (canPack) statuses.push("포장가능");
-  if (isPacked(record)) statuses.push("포장완료");
+  if (isFullyPacked(record)) statuses.push("포장완료");
   return combineStatuses(statuses);
 }
 
 function exportRecordStatus(stock, record) {
   if (!record) return stock.status;
-  if (stock.shortage > 0) return "부족";
   const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || stock.orderQty || 0) > 0;
   const statuses = [];
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
   else if (isDelivered(record)) statuses.push("납품");
   else if (record.productState) statuses.push(record.productState);
+  if (!statuses.length && stock.shortage > 0) statuses.push("부족");
   if (canPack) statuses.push("포장가능");
-  if (isPacked(record)) statuses.push("포장완료");
+  if (isFullyPacked(record)) statuses.push("포장완료");
   return statuses.length ? combineStatuses(statuses) : stock.available === 0 ? "소진" : "보유";
 }
 
