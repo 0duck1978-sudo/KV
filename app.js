@@ -663,8 +663,13 @@ function rowsWithStock() {
     if (hasPacked || hasSameProductPacked) statusParts.push("포장완료");
     if (!statusParts.length) statusParts.push(stockStatus);
     const deliveryStatus = combineStatuses(statusParts);
+    const editedLocationRecord = records.find((record) => deliveryEdits[record.id]?.location !== undefined);
+    const displayLocation = editedLocationRecord
+      ? editedLocationRecord.location
+      : records.find((record) => String(record.location || "").trim())?.location || item.location;
     return {
       ...item,
+      location: displayLocation,
       baseStock,
       orderQty,
       deliveredQty: displayDeliveredQty,
