@@ -367,6 +367,10 @@ function shouldShareProductStock(productCode) {
   return vendors.size > 1;
 }
 
+function usesSharedProductStock(item) {
+  return Boolean(item?.shareByProduct) || shouldShareProductStock(item?.productCode);
+}
+
 function isDeleted(vendor, productCode) {
   return deletedVendors.includes(vendor) || isProductDeleted(vendor, productCode);
 }
@@ -388,7 +392,7 @@ function restoreReaddedProducts() {
 
 function movementTotalsMap() {
   const map = new Map();
-  for (const movement of movements.filter((row) => !row.shareByProduct)) {
+  for (const movement of movements.filter((row) => !usesSharedProductStock(row))) {
     const key = `${movement.vendor}::${movement.productCode}`;
     const totals = map.get(key) || { inbound: 0, outbound: 0 };
     if (movement.type === "in") totals.inbound += Number(movement.qty || 0);
@@ -400,7 +404,7 @@ function movementTotalsMap() {
 
 function sharedMovementTotalsMap() {
   const map = new Map();
-  for (const movement of movements.filter((row) => row.shareByProduct)) {
+  for (const movement of movements.filter(usesSharedProductStock)) {
     const key = stockKey(movement);
     const totals = map.get(key) || { inbound: 0, outbound: 0 };
     if (movement.type === "in") totals.inbound += Number(movement.qty || 0);
@@ -621,10 +625,46 @@ function rowsWithStock() {
   }
 
   function sharedCommittedQtyForItem(item) {
+    if (!shouldShareProductStock(item.productCode)) return 0;
     return baseRecords.reduce((sum, record) => {
-      if (!deliveryEdits[record.id]?.shareByProduct && !record.shareByProduct) return sum;
       if (stockKey(record) !== stockKey(item) || itemKey(record) === itemKey(item)) return sum;
       return sum + committedQtyForRecord(record);
+    }, 0);
+  }
+
+  function priorityDate(record) {
+    return record.dueDate || record.deliveredDate || "9999-99-99";
+  }
+
+  function priorityOpenDemand(record) {
+    const effective = effectiveDeliveryRecord(record);
+    if (isDelivered(effective) || isFullyPacked(effective) || isFullyPacked(record)) return 0;
+    return Math.max(0, Number(effective.orderQty || 0));
+  }
+
+  function earliestOpenPriorityForItem(item, records) {
+    return records
+      .filter((record) => priorityOpenDemand(record) > 0)
+      .map((record) => ({
+        date: priorityDate(record),
+        vendor: record.vendor,
+        sourceRow: Number(record.sourceRow || 0),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.vendor.localeCompare(b.vendor, "ko") || a.sourceRow - b.sourceRow)[0]
+      || { date: "9999-99-99", vendor: item.vendor, sourceRow: 0 };
+  }
+
+  function sharedPriorityDemandBeforeItem(item, records) {
+    if (!shouldShareProductStock(item.productCode)) return 0;
+    const currentPriority = earliestOpenPriorityForItem(item, records);
+    return baseRecords.reduce((sum, record) => {
+      if (stockKey(record) !== stockKey(item) || itemKey(record) === itemKey(item)) return sum;
+      const demand = priorityOpenDemand(record);
+      if (demand <= 0) return sum;
+      const comparison = priorityDate(record).localeCompare(currentPriority.date)
+        || record.vendor.localeCompare(currentPriority.vendor, "ko")
+        || Number(record.sourceRow || 0) - currentPriority.sourceRow;
+      return comparison < 0 ? sum + demand : sum;
     }, 0);
   }
 
@@ -673,7 +713,9 @@ function rowsWithStock() {
       ? baseStock - committedQty - sharedCommittedQty - extraOutbound
       : baseStock - displayDeliveredQty;
     const shortageDemand = Math.max(0, orderQty - packedOpenQty);
-    const shortage = Math.max(0, shortageDemand - Math.max(0, available));
+    const priorityDemandBefore = sharedPriorityDemandBeforeItem(item, records);
+    const availableAfterPriority = available - priorityDemandBefore;
+    const shortage = Math.max(0, shortageDemand - Math.max(0, availableAfterPriority));
     const hasUnpackedOpenOrder = shortageDemand > 0;
     const hasOnlyNoInfoRecords = hasRecords && records.length > 0 && records.every(hasNoOrderInfo);
     const hasNoInfo = hasOnlyNoInfoRecords || (Boolean(item.productCode) && isBlankOrderQty(orderQty) && dates.length === 0);
