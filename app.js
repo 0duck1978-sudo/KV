@@ -208,6 +208,7 @@ function applySharedState(payload = {}) {
   baseStockEdits = payload.baseStockEdits || {};
   deletedDeliveryIds = Array.isArray(payload.deletedDeliveryIds) ? payload.deletedDeliveryIds : [];
   appliedStockCorrectionVersion = Number(payload.appliedStockCorrectionVersion || 0);
+  const restoredProducts = restoreReaddedProducts();
   localStorage.setItem(movementStorageKey, JSON.stringify(movements));
   localStorage.setItem(deliveryEditStorageKey, JSON.stringify(deliveryEdits));
   localStorage.setItem(customProductStorageKey, JSON.stringify(customProducts));
@@ -218,6 +219,7 @@ function applySharedState(payload = {}) {
   localStorage.setItem(deletedDeliveryStorageKey, JSON.stringify(deletedDeliveryIds));
   localStorage.setItem(stockCorrectionVersionStorageKey, JSON.stringify(appliedStockCorrectionVersion));
   applyingCloudState = false;
+  return restoredProducts;
 }
 
 function setSyncStatus(message, isError = false) {
@@ -286,8 +288,9 @@ async function loadCloudState(user) {
   setSyncStatus("불러오는 중");
   const { data, error } = await supabaseClient.from("inventory_state").select("payload").eq("id", "main").maybeSingle();
   if (error) throw error;
+  let restoredProducts = false;
   if (data?.payload) {
-    applySharedState(data.payload);
+    restoredProducts = applySharedState(data.payload);
   } else {
     const { error: createError } = await supabaseClient.from("inventory_state").insert({
       id: "main",
@@ -297,7 +300,7 @@ async function loadCloudState(user) {
     if (createError) throw createError;
   }
   cloudReady = true;
-  if (applyOneTimeStockCorrections()) {
+  if (restoredProducts || applyOneTimeStockCorrections()) {
     scheduleCloudSave();
   }
   setSyncStatus("저장됨");
@@ -333,7 +336,11 @@ function inventoryVendors() {
 }
 
 function inventoryRows() {
-  return [...seed, ...customProducts].filter((item) => !isDeleted(item.vendor, item.productCode));
+  const rowsByKey = new Map();
+  for (const item of [...seed, ...customProducts]) {
+    rowsByKey.set(itemKey(item), item);
+  }
+  return [...rowsByKey.values()].filter((item) => !isDeleted(item.vendor, item.productCode));
 }
 
 function itemKey(item) {
@@ -361,6 +368,13 @@ function shouldShareProductStock(productCode) {
 
 function isDeleted(vendor, productCode) {
   return deletedVendors.includes(vendor) || deletedProducts.includes(`${vendor}::${productCode}`);
+}
+
+function restoreReaddedProducts() {
+  const readdedKeys = new Set([...customProducts, ...customDeliveries].map(itemKey));
+  const before = deletedProducts.length;
+  deletedProducts = deletedProducts.filter((key) => !readdedKeys.has(key));
+  return deletedProducts.length !== before;
 }
 
 function movementTotalsMap() {
@@ -837,12 +851,32 @@ function filteredProductRows() {
   const query = els.searchInput.value.trim().toLowerCase();
   const vendor = els.vendorFilter.value;
   if (!query) return [];
-  return deliveryRows().filter((row) => {
+  const deliveryMatches = deliveryRows().filter((row) => {
     const vendorOk = vendor === "all" || row.vendor === vendor;
     const productCode = row.productCode.toLowerCase();
     const productOk = selectedProductCode ? productCode === selectedProductCode.toLowerCase() : productCode.includes(query);
     return vendorOk && productOk;
   });
+  const deliveryItems = new Set(deliveryMatches.map(itemKey));
+  const stockOnlyMatches = rowsWithStock()
+    .filter((row) => {
+      const vendorOk = vendor === "all" || row.vendor === vendor;
+      const productCode = row.productCode.toLowerCase();
+      const productOk = selectedProductCode ? productCode === selectedProductCode.toLowerCase() : productCode.includes(query);
+      return vendorOk && productOk && !deliveryItems.has(itemKey(row));
+    })
+    .map((row) => ({
+      ...row,
+      id: `stock-only-${itemKey(row)}`,
+      productState: row.status,
+      shippedQty: row.deliveredQty || 0,
+      deliveredDate: "",
+      remarks: "",
+      specialNote: row.note || "",
+      sourceRow: 0,
+      stockOnly: true,
+    }));
+  return [...deliveryMatches, ...stockOnlyMatches];
 }
 
 function filteredMovements() {
@@ -908,7 +942,7 @@ function renderProductSearch(rows) {
     textCell(row.remarks),
     textCell(row.specialNote),
     `<button class="row-stock-btn" type="button" data-stock-vendor="${escapeHtml(row.vendor)}" data-stock-code="${escapeHtml(row.productCode)}">변경</button>`,
-    `<button class="row-edit-btn" type="button" data-edit-id="${escapeHtml(row.id)}">수정</button>`,
+    row.stockOnly ? "" : `<button class="row-edit-btn" type="button" data-edit-id="${escapeHtml(row.id)}">수정</button>`,
   ]);
   if (!els.searchInput.value.trim()) {
     els.emptyState.textContent = "조회할 품번을 입력하세요.";
@@ -1238,6 +1272,7 @@ function registerProduct(event) {
     return;
   }
   const existingProduct = inventoryRows().find((row) => row.vendor === vendor && row.productCode.toLowerCase() === productCode.toLowerCase());
+  deletedProducts = deletedProducts.filter((key) => key !== `${vendor}::${productCode}`);
 
   const finalLocation = existingProduct?.location || location;
   const currentStock = existingProduct ? Number(existingProduct.currentStock || 0) : initialStock;
