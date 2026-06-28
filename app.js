@@ -372,7 +372,11 @@ function isDeleted(vendor, productCode) {
 }
 
 function restoreReaddedProducts() {
-  const readdedKeys = new Set([...customProducts, ...customDeliveries].map(itemKey));
+  const deletedKeys = new Set(deletedProducts);
+  const readdedKeys = new Set([...customProducts, ...customDeliveries]
+    .filter((item) => String(item.id || "").startsWith("product-") || String(item.id || "").startsWith("delivery-"))
+    .map(itemKey)
+    .filter((key) => !deletedKeys.has(key)));
   const before = deletedProducts.length;
   deletedProducts = deletedProducts.filter((key) => !readdedKeys.has(key));
   return deletedProducts.length !== before;
@@ -1133,7 +1137,7 @@ function toggleNewVendorField() {
 
 function populateManageProducts() {
   const vendor = els.manageVendor.value;
-  const products = inventoryRows()
+  const products = [...inventoryRows(), ...deliveryRows()]
     .filter((item) => item.vendor === vendor)
     .map((item) => item.productCode)
     .filter((value, index, values) => values.indexOf(value) === index)
@@ -1147,7 +1151,9 @@ function populateManageProducts() {
 
 function selectedManageProduct() {
   const input = els.manageProduct.value.trim().toLowerCase();
-  return inventoryRows().find((item) => item.vendor === els.manageVendor.value && item.productCode.toLowerCase() === input)?.productCode || "";
+  return [...inventoryRows(), ...deliveryRows()]
+    .find((item) => item.vendor === els.manageVendor.value && item.productCode.toLowerCase() === input)?.productCode
+    || els.manageProduct.value.trim();
 }
 
 function populateManageRecords() {
@@ -1186,7 +1192,9 @@ function removeRelatedRecords(vendor, productCode = null) {
   customProducts = customProducts.filter((row) => !matches(row));
   customDeliveries = customDeliveries.filter((row) => !matches(row));
   deliveryIds.forEach((id) => delete deliveryEdits[id]);
-  deletedDeliveryIds = deletedDeliveryIds.filter((id) => !deliveryIds.includes(id));
+  for (const id of deliveryIds) {
+    if (!deletedDeliveryIds.includes(id)) deletedDeliveryIds.push(id);
+  }
   Object.keys(baseStockEdits).forEach((key) => {
     if (key === `${vendor}::${productCode}` || (!productCode && key.startsWith(`${vendor}::`))) delete baseStockEdits[key];
   });
