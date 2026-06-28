@@ -368,7 +368,11 @@ function shouldShareProductStock(productCode) {
 }
 
 function isDeleted(vendor, productCode) {
-  return deletedVendors.includes(vendor) || deletedProducts.includes(`${vendor}::${productCode}`);
+  return deletedVendors.includes(vendor) || isProductDeleted(vendor, productCode);
+}
+
+function isProductDeleted(vendor, productCode) {
+  return deletedProducts.includes(`${vendor}::${productCode}`);
 }
 
 function restoreReaddedProducts() {
@@ -454,8 +458,8 @@ function orderQtyAdjustmentMap() {
 
 function baseDeliveryRows() {
   return [...deliverySeed, ...customDeliveries]
-    .filter((record) => !deletedDeliveryIds.includes(record.id))
-    .filter((record) => !isDeleted(record.vendor, record.productCode))
+    .filter((record) => !deletedDeliveryIds.includes(record.id) || isProductDeleted(record.vendor, record.productCode))
+    .filter((record) => !deletedVendors.includes(record.vendor))
     .map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
 }
 
@@ -998,7 +1002,7 @@ function renderDelivery(rows, completedOnly) {
   setBody(sorted, (row) => [
     textCell(row.vendor),
     productLink(row.productCode),
-    deliveryStatusBadge(row.productState),
+    deliveryStatusBadge(deliveryDisplayStatus(row)),
     numCell(row.orderQty),
     numCell(row.shippedQty || 0),
     textCell(row.dueDate),
@@ -1006,6 +1010,13 @@ function renderDelivery(rows, completedOnly) {
     textCell(row.remarks),
     textCell(row.specialNote),
     `<button class="row-edit-btn" type="button" data-edit-id="${escapeHtml(row.id)}">수정</button>`,
+  ]);
+}
+
+function deliveryDisplayStatus(row) {
+  return combineStatuses([
+    isProductDeleted(row.vendor, row.productCode) ? "삭제된 품목" : "",
+    row.productState,
   ]);
 }
 
@@ -1235,10 +1246,9 @@ function deleteProduct() {
     populateManageRecords();
     return;
   }
-  if (!confirm(`${vendor}의 ${productCode} 품번을 삭제할까요?\n관련 입출고·납품 기록도 함께 삭제됩니다.`)) return;
+  if (!confirm(`${vendor}의 ${productCode} 품번을 재고현황에서 숨길까요?\n납품기록과 입출내역은 조회용으로 남습니다.`)) return;
   const key = `${vendor}::${productCode}`;
   if (!deletedProducts.includes(key)) deletedProducts.push(key);
-  removeRelatedRecords(vendor, productCode);
   saveDeletedItems();
   els.manageDialog.close();
   finishDelete();
@@ -1613,6 +1623,7 @@ function productSearchRecordStatus(stock, record) {
   if (!stock) return record.productState || "";
   const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || 0) > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= Number(record.orderQty || 0);
   const statuses = [];
+  if (isProductDeleted(record.vendor, record.productCode)) statuses.push("삭제된 품목");
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
   else if (isDelivered(record)) statuses.push("납품");
   else if (record.productState) statuses.push(record.productState);
@@ -1627,6 +1638,7 @@ function exportRecordStatus(stock, record) {
   if (hasNoOrderInfo(record)) return "발주정보없음";
   const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || stock.orderQty || 0) > 0;
   const statuses = [];
+  if (isProductDeleted(record.vendor, record.productCode)) statuses.push("삭제된 품목");
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
   else if (isDelivered(record)) statuses.push("납품");
   else if (record.productState) statuses.push(record.productState);
