@@ -90,6 +90,7 @@ const els = {
   editProductCode: document.querySelector("#editProductCode"),
   editBaseStock: document.querySelector("#editBaseStock"),
   editOrderQty: document.querySelector("#editOrderQty"),
+  editLocation: document.querySelector("#editLocation"),
   editProductState: document.querySelector("#editProductState"),
   editDueDate: document.querySelector("#editDueDate"),
   editDeliveredDate: document.querySelector("#editDeliveredDate"),
@@ -1302,6 +1303,7 @@ function openDeliveryEditor(recordId) {
   els.editProductCode.textContent = record.productCode;
   els.editBaseStock.value = stockItem?.baseStock ?? 0;
   els.editOrderQty.value = record.orderQty;
+  els.editLocation.value = record.location || "";
   els.editProductState.value = record.productState;
   els.editDueDate.value = record.dueDate;
   els.editDeliveredDate.value = record.deliveredDate;
@@ -1322,6 +1324,7 @@ function saveDeliveryRecord(event) {
     return;
   }
   const sharedInbound = movementTotalsForItem(record).inbound;
+  const nextLocation = els.editLocation.value.trim();
   const nextProductState = els.editProductState.value.trim();
   const nextDueDate = els.editDueDate.value;
   const nextDeliveredDate = els.editDeliveredDate.value;
@@ -1330,6 +1333,7 @@ function saveDeliveryRecord(event) {
   baseStockEdits[itemKey(record)] = baseStock - sharedInbound;
   deliveryEdits[id] = {
     orderQty,
+    location: nextLocation,
     productState: nextProductState,
     dueDate: nextDueDate,
     deliveredDate: nextDeliveredDate,
