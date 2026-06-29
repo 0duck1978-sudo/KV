@@ -88,7 +88,6 @@ const els = {
   editRecordId: document.querySelector("#editRecordId"),
   editVendor: document.querySelector("#editVendor"),
   editProductCode: document.querySelector("#editProductCode"),
-  editProductCodeInput: document.querySelector("#editProductCodeInput"),
   editBaseStock: document.querySelector("#editBaseStock"),
   editOrderQty: document.querySelector("#editOrderQty"),
   editLocation: document.querySelector("#editLocation"),
@@ -1426,7 +1425,6 @@ function openDeliveryEditor(recordId) {
   els.editRecordId.value = record.id;
   els.editVendor.textContent = record.vendor;
   els.editProductCode.textContent = record.productCode;
-  els.editProductCodeInput.value = record.productCode;
   els.editBaseStock.value = stockItem?.baseStock ?? 0;
   els.editOrderQty.value = record.orderQty;
   els.editLocation.value = record.location || "";
@@ -1445,7 +1443,6 @@ function openStockOnlyDeliveryEditor(vendor, productCode) {
   els.editRecordId.value = "";
   els.editVendor.textContent = vendor;
   els.editProductCode.textContent = productCode;
-  els.editProductCodeInput.value = productCode;
   els.editBaseStock.value = stockItem.baseStock ?? 0;
   els.editOrderQty.value = stockItem.orderQty || "";
   els.editLocation.value = stockItem.location || "";
@@ -1455,34 +1452,6 @@ function openStockOnlyDeliveryEditor(vendor, productCode) {
   els.editSpecialNote.value = stockItem.note || "";
   els.editRemarks.value = "";
   els.deliveryDialog.showModal();
-}
-
-function confirmProductCodeEdit(oldCode, newCode) {
-  return oldCode === newCode || confirm(`품번 오타를 수정할까요?\n\n기존: ${oldCode}\n수정: ${newCode}\n\n수량과 납품상태는 변경하지 않습니다.`);
-}
-
-function moveProductCodeState(vendor, oldCode, newCode) {
-  if (oldCode === newCode) return;
-  const oldKey = `${vendor}::${oldCode}`;
-  const newKey = `${vendor}::${newCode}`;
-  const sourceProduct = [...customProducts, ...seed].find((item) => item.vendor === vendor && item.productCode === oldCode);
-  const existingNewProduct = customProducts.find((item) => item.vendor === vendor && item.productCode === newCode);
-  if (sourceProduct && !existingNewProduct) {
-    customProducts.push({
-      ...sourceProduct,
-      id: makeId("product"),
-      productCode: newCode,
-    });
-  }
-  if (baseStockEdits[oldKey] !== undefined && baseStockEdits[newKey] === undefined) {
-    baseStockEdits[newKey] = baseStockEdits[oldKey];
-    delete baseStockEdits[oldKey];
-  }
-  customProducts.forEach((item) => {
-    if (item.vendor === vendor && item.productCode === oldCode) item.productCode = newCode;
-  });
-  if (!deletedProducts.includes(oldKey)) deletedProducts.push(oldKey);
-  deletedProducts = deletedProducts.filter((key) => key !== newKey);
 }
 
 function saveDeliveryRecord(event) {
@@ -1496,28 +1465,19 @@ function saveDeliveryRecord(event) {
   const previousStock = record ? stockSnapshot(record.vendor, record.productCode) : null;
   const baseStock = Number(els.editBaseStock.value);
   const orderQty = Number(els.editOrderQty.value);
-  const nextProductCode = els.editProductCodeInput.value.trim();
   if (!record || !Number.isFinite(baseStock) || baseStock < 0 || !Number.isFinite(orderQty) || orderQty < 0) {
     alert("기존재고와 발주수량을 확인해주세요.");
     return;
   }
-  if (!nextProductCode) {
-    alert("품번을 입력해주세요.");
-    return;
-  }
-  if (!confirmProductCodeEdit(record.productCode, nextProductCode)) return;
-  moveProductCodeState(record.vendor, record.productCode, nextProductCode);
-  const nextRecordKey = { ...record, productCode: nextProductCode };
-  const sharedInbound = movementTotalsForItem(nextRecordKey).inbound;
+  const sharedInbound = movementTotalsForItem(record).inbound;
   const nextLocation = els.editLocation.value.trim();
   const nextProductState = els.editProductState.value.trim();
   const nextDueDate = els.editDueDate.value;
   const nextDeliveredDate = els.editDeliveredDate.value;
   const nextSpecialNote = els.editSpecialNote.value.trim();
   const nextRemarks = els.editRemarks.value.trim();
-  baseStockEdits[itemKey(nextRecordKey)] = baseStock - sharedInbound;
+  baseStockEdits[itemKey(record)] = baseStock - sharedInbound;
   deliveryEdits[id] = {
-    productCode: nextProductCode,
     orderQty,
     location: nextLocation,
     productState: nextProductState,
@@ -1525,24 +1485,19 @@ function saveDeliveryRecord(event) {
     deliveredDate: nextDeliveredDate,
     specialNote: nextSpecialNote,
     remarks: nextRemarks,
-    shareByProduct: shouldShareProductStock(nextProductCode),
+    shareByProduct: shouldShareProductStock(record.productCode),
   };
   saveDeliveryEdits();
-  saveCustomData();
-  saveDeletedItems();
   saveBaseStockEdits();
   els.deliveryDialog.close();
   render();
-  const stock = stockSnapshot(record.vendor, nextProductCode);
+  const stock = stockSnapshot(record.vendor, record.productCode);
   const baseChanged = previousStock && Number(previousStock.baseStock || 0) !== baseStock;
-  const codeChanged = record.productCode !== nextProductCode;
   const orderChanged = Number(record.orderQty || 0) !== orderQty || record.dueDate !== nextDueDate;
   const becamePacked = nextProductState.includes("포장") && !String(record.productState || "").includes("포장");
   const alertKind = becamePacked
     ? "포장완료"
-    : codeChanged
-      ? "품번 수정"
-      : orderChanged
+    : orderChanged
       ? (Number(record.orderQty || 0) === 0 && orderQty > 0 ? "새 발주 등록" : "발주 수정")
       : baseChanged
         ? "재고변경"
@@ -1551,7 +1506,7 @@ function saveDeliveryRecord(event) {
     sendInventoryAlert({
       kind: alertKind,
       vendor: record.vendor,
-      productCode: nextProductCode,
+      productCode: record.productCode,
       qty: orderQty,
       currentStock: stock?.available,
       orderQty: stock?.orderQty,
@@ -1568,29 +1523,21 @@ function saveStockOnlyDeliveryRecord() {
   const stockItem = rowsWithStock().find((row) => row.vendor === vendor && row.productCode === productCode);
   const baseStock = Number(els.editBaseStock.value);
   const orderQty = Number(els.editOrderQty.value || 0);
-  const nextProductCode = els.editProductCodeInput.value.trim();
   if (!stockItem || !Number.isFinite(baseStock) || baseStock < 0 || !Number.isFinite(orderQty) || orderQty < 0) {
     alert("기존재고와 발주수량을 확인해주세요.");
     return;
   }
-  if (!nextProductCode) {
-    alert("품번을 입력해주세요.");
-    return;
-  }
-  if (!confirmProductCodeEdit(productCode, nextProductCode)) return;
-  moveProductCodeState(vendor, productCode, nextProductCode);
-  const nextStockKey = { ...stockItem, productCode: nextProductCode };
   const nextLocation = els.editLocation.value.trim();
   const nextProductState = els.editProductState.value.trim();
   const nextDueDate = els.editDueDate.value;
   const nextDeliveredDate = els.editDeliveredDate.value;
   const nextSpecialNote = els.editSpecialNote.value.trim();
   const nextRemarks = els.editRemarks.value.trim();
-  baseStockEdits[itemKey(nextStockKey)] = baseStock - movementTotalsForItem(nextStockKey).inbound;
+  baseStockEdits[itemKey(stockItem)] = baseStock - movementTotalsForItem(stockItem).inbound;
   customDeliveries.push({
     id: makeId("delivery"),
     vendor,
-    productCode: nextProductCode,
+    productCode,
     location: nextLocation,
     orderQty,
     productState: nextProductState,
@@ -1599,22 +1546,22 @@ function saveStockOnlyDeliveryRecord() {
     deliveredDate: nextDeliveredDate,
     remarks: nextRemarks,
     specialNote: nextSpecialNote,
-    shareByProduct: shouldShareProductStock(nextProductCode),
+    shareByProduct: shouldShareProductStock(productCode),
     sourceSheet: "직접수정",
     sourceRow: customDeliveries.length + 1,
   });
-  deletedProducts = deletedProducts.filter((key) => key !== `${vendor}::${nextProductCode}`);
+  deletedProducts = deletedProducts.filter((key) => key !== `${vendor}::${productCode}`);
   saveCustomData();
   saveDeletedItems();
   saveBaseStockEdits();
   stockOnlyEditTarget = null;
   els.deliveryDialog.close();
   render();
-  const stock = stockSnapshot(vendor, nextProductCode);
+  const stock = stockSnapshot(vendor, productCode);
   sendInventoryAlert({
     kind: orderQty > 0 ? "새 발주 등록" : "품번 수정",
     vendor,
-    productCode: nextProductCode,
+    productCode,
     qty: orderQty,
     currentStock: stock?.available,
     orderQty: stock?.orderQty,
