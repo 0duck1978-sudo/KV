@@ -9,11 +9,16 @@ const deletedProductStorageKey = "vendorDeletedProducts.v1";
 const baseStockEditStorageKey = "vendorBaseStockEdits.v1";
 const deletedDeliveryStorageKey = "vendorDeletedDeliveries.v1";
 const stockCorrectionVersionStorageKey = "vendorStockCorrectionVersion.v1";
+const legacyCleanupVersionStorageKey = "vendorLegacyCleanupVersion.v1";
 const stockCorrectionVersion = 1;
+const legacyCleanupVersion = 1;
 const stockCorrectionTargets = [
   { vendor: "경도", productCode: "20007735", available: 124 },
   { vendor: "경도", productCode: "20006459", available: 68 },
   { vendor: "경도", productCode: "60359116", available: 313 },
+];
+const legacyCleanupTargets = [
+  { vendor: "지엔티", productCode: "60635479-6B", deliveryId: "지엔티::72" },
 ];
 
 const els = {
@@ -126,6 +131,7 @@ let deletedProducts = loadJson(deletedProductStorageKey, []);
 let baseStockEdits = loadJson(baseStockEditStorageKey, {});
 let deletedDeliveryIds = loadJson(deletedDeliveryStorageKey, []);
 let appliedStockCorrectionVersion = Number(loadJson(stockCorrectionVersionStorageKey, 0));
+let appliedLegacyCleanupVersion = Number(loadJson(legacyCleanupVersionStorageKey, 0));
 let supabaseClient = null;
 let signedInProfile = null;
 let cloudReady = false;
@@ -184,6 +190,11 @@ function saveStockCorrectionVersion() {
   scheduleCloudSave();
 }
 
+function saveLegacyCleanupVersion() {
+  localStorage.setItem(legacyCleanupVersionStorageKey, JSON.stringify(appliedLegacyCleanupVersion));
+  scheduleCloudSave();
+}
+
 function sharedStatePayload() {
   return {
     movements,
@@ -195,6 +206,7 @@ function sharedStatePayload() {
     baseStockEdits,
     deletedDeliveryIds,
     appliedStockCorrectionVersion,
+    appliedLegacyCleanupVersion,
   };
 }
 
@@ -209,6 +221,7 @@ function applySharedState(payload = {}) {
   baseStockEdits = payload.baseStockEdits || {};
   deletedDeliveryIds = Array.isArray(payload.deletedDeliveryIds) ? payload.deletedDeliveryIds : [];
   appliedStockCorrectionVersion = Number(payload.appliedStockCorrectionVersion || 0);
+  appliedLegacyCleanupVersion = Number(payload.appliedLegacyCleanupVersion || 0);
   const restoredProducts = restoreReaddedProducts();
   localStorage.setItem(movementStorageKey, JSON.stringify(movements));
   localStorage.setItem(deliveryEditStorageKey, JSON.stringify(deliveryEdits));
@@ -219,6 +232,7 @@ function applySharedState(payload = {}) {
   localStorage.setItem(baseStockEditStorageKey, JSON.stringify(baseStockEdits));
   localStorage.setItem(deletedDeliveryStorageKey, JSON.stringify(deletedDeliveryIds));
   localStorage.setItem(stockCorrectionVersionStorageKey, JSON.stringify(appliedStockCorrectionVersion));
+  localStorage.setItem(legacyCleanupVersionStorageKey, JSON.stringify(appliedLegacyCleanupVersion));
   applyingCloudState = false;
   return restoredProducts;
 }
@@ -301,7 +315,7 @@ async function loadCloudState(user) {
     if (createError) throw createError;
   }
   cloudReady = true;
-  if (restoredProducts || applyOneTimeStockCorrections()) {
+  if (restoredProducts || applyOneTimeStockCorrections() || applyOneTimeLegacyCleanup()) {
     scheduleCloudSave();
   }
   setSyncStatus("저장됨");
@@ -314,6 +328,7 @@ function subscribeToCloudState() {
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "inventory_state", filter: "id=eq.main" }, (change) => {
       if (!change.new?.payload) return;
       applySharedState(change.new.payload);
+      if (applyOneTimeLegacyCleanup()) scheduleCloudSave();
       populateSelects();
       render();
       setSyncStatus("동기화됨");
@@ -462,7 +477,7 @@ function orderQtyAdjustmentMap() {
 
 function baseDeliveryRows() {
   return [...deliverySeed, ...customDeliveries]
-    .filter((record) => !deletedDeliveryIds.includes(record.id) || isProductDeleted(record.vendor, record.productCode))
+    .filter((record) => !deletedDeliveryIds.includes(record.id))
     .filter((record) => !deletedVendors.includes(record.vendor))
     .map((record) => ({ ...record, ...(deliveryEdits[record.id] || {}) }));
 }
@@ -812,6 +827,50 @@ function applyOneTimeStockCorrections() {
   appliedStockCorrectionVersion = stockCorrectionVersion;
   localStorage.setItem(baseStockEditStorageKey, JSON.stringify(baseStockEdits));
   localStorage.setItem(stockCorrectionVersionStorageKey, JSON.stringify(appliedStockCorrectionVersion));
+  return changed;
+}
+
+function applyOneTimeLegacyCleanup() {
+  if (appliedLegacyCleanupVersion >= legacyCleanupVersion) return false;
+  let changed = false;
+  for (const target of legacyCleanupTargets) {
+    const key = `${target.vendor}::${target.productCode}`;
+    if (!deletedProducts.includes(key)) {
+      deletedProducts.push(key);
+      changed = true;
+    }
+    if (target.deliveryId && !deletedDeliveryIds.includes(target.deliveryId)) {
+      deletedDeliveryIds.push(target.deliveryId);
+      changed = true;
+    }
+    const matches = (row) => row.vendor === target.vendor && row.productCode === target.productCode;
+    const movementCount = movements.length;
+    const customProductCount = customProducts.length;
+    const customDeliveryCount = customDeliveries.length;
+    movements = movements.filter((row) => !matches(row));
+    customProducts = customProducts.filter((row) => !matches(row));
+    customDeliveries = customDeliveries.filter((row) => !matches(row));
+    if (movementCount !== movements.length || customProductCount !== customProducts.length || customDeliveryCount !== customDeliveries.length) {
+      changed = true;
+    }
+    if (target.deliveryId && deliveryEdits[target.deliveryId]) {
+      delete deliveryEdits[target.deliveryId];
+      changed = true;
+    }
+    if (baseStockEdits[key] !== undefined) {
+      delete baseStockEdits[key];
+      changed = true;
+    }
+  }
+  appliedLegacyCleanupVersion = legacyCleanupVersion;
+  localStorage.setItem(movementStorageKey, JSON.stringify(movements));
+  localStorage.setItem(customProductStorageKey, JSON.stringify(customProducts));
+  localStorage.setItem(customDeliveryStorageKey, JSON.stringify(customDeliveries));
+  localStorage.setItem(deletedProductStorageKey, JSON.stringify(deletedProducts));
+  localStorage.setItem(deletedDeliveryStorageKey, JSON.stringify(deletedDeliveryIds));
+  localStorage.setItem(deliveryEditStorageKey, JSON.stringify(deliveryEdits));
+  localStorage.setItem(baseStockEditStorageKey, JSON.stringify(baseStockEdits));
+  localStorage.setItem(legacyCleanupVersionStorageKey, JSON.stringify(appliedLegacyCleanupVersion));
   return changed;
 }
 
