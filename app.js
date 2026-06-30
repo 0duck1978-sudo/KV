@@ -1757,7 +1757,8 @@ function productSearchRecordStatus(stock, record) {
 function exportRecordStatus(stock, record) {
   if (!record) return stock.status;
   if (hasNoOrderInfo(record)) return "발주정보없음";
-  const canPack = !isPacked(record) && !isDelivered(record) && Number(record.orderQty || stock.orderQty || 0) > 0;
+  const orderQty = Number(record.orderQty || stock.orderQty || 0);
+  const canPack = !isPacked(record) && !isDelivered(record) && orderQty > 0 && Number(record.shippedQty || 0) === 0 && stock.available >= orderQty;
   const statuses = [];
   if (isProductDeleted(record.vendor, record.productCode)) statuses.push("삭제된 품목");
   if (record.productState.includes("일부납품")) statuses.push("일부납품");
