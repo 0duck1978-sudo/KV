@@ -1553,10 +1553,13 @@ function saveDeliveryRecord(event) {
   const stock = stockSnapshot(record.vendor, record.productCode);
   const baseChanged = previousStock && Number(previousStock.baseStock || 0) !== baseStock;
   const orderChanged = Number(record.orderQty || 0) !== orderQty || record.dueDate !== nextDueDate;
+  const becameDelivered = !isDelivered(record) && isDelivered({ ...record, productState: nextProductState, deliveredDate: nextDeliveredDate });
   const becamePacked = nextProductState.includes("포장") && !String(record.productState || "").includes("포장");
-  const alertKind = becamePacked
-    ? "포장완료"
-    : orderChanged
+  const alertKind = becameDelivered
+    ? "납품완료"
+    : becamePacked
+      ? "포장완료"
+      : orderChanged
       ? (Number(record.orderQty || 0) === 0 && orderQty > 0 ? "새 발주 등록" : "발주 수정")
       : baseChanged
         ? "재고변경"
