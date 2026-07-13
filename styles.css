@@ -434,6 +434,11 @@ th.num {
   color: var(--warn);
 }
 
+.badge.packed {
+  background: #fef3c7;
+  color: #b45309;
+}
+
 .empty-state {
   color: var(--muted);
   display: none;
