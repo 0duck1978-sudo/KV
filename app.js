@@ -1034,7 +1034,7 @@ function render() {
   if (activeView === "stock") renderStock(stockRows);
   if (activeView === "shortage") renderShortage(stockRows.filter((row) => row.shortage > 0));
   if (activeView === "product") renderProductSearch(filteredProductRows());
-  if (activeView === "schedule") renderDelivery(records, false);
+  if (activeView === "schedule") renderDelivery(records, false, true);
   if (activeView === "packed") renderDelivery(records.filter(isPacked), false);
   if (activeView === "delivered") renderDelivery(records.filter(isDeliveryMenuItem), true);
   if (activeView === "history") renderMovements(filteredMovements());
@@ -1113,8 +1113,13 @@ function renderShortage(rows) {
   ]);
 }
 
-function renderDelivery(rows, completedOnly) {
+function renderDelivery(rows, completedOnly, dueDateAscending = false) {
   const sorted = [...rows].sort((a, b) => {
+    if (dueDateAscending) {
+      return (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99")
+        || naturalCompare(a.productCode, b.productCode)
+        || a.vendor.localeCompare(b.vendor, "ko");
+    }
     const left = completedOnly ? a.deliveredDate : a.dueDate;
     const right = completedOnly ? b.deliveredDate : b.dueDate;
     return (right || "0000-00-00").localeCompare(left || "0000-00-00") || a.vendor.localeCompare(b.vendor, "ko");
@@ -1805,8 +1810,15 @@ function currentExport() {
     let rows = filteredDeliveryRows();
     if (activeView === "packed") rows = rows.filter(isPacked);
     if (activeView === "delivered") rows = rows.filter(isDeliveryMenuItem);
+    if (activeView === "schedule") {
+      rows = [...rows].sort((a, b) =>
+        (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99")
+          || naturalCompare(a.productCode, b.productCode)
+          || a.vendor.localeCompare(b.vendor, "ko"),
+      );
+    }
     return {
-      name: activeView === "delivered" ? "납품완료" : activeView === "packed" ? "포장완료" : "납품납기조회",
+      name: activeView === "delivered" ? "납품완료" : activeView === "packed" ? "포장완료" : "납기조회",
       header: ["업체", "품번", "제품상태", "발주수량", "납품수량", "납기일자", "납품일자", "비고", "특이사항", "원본시트"],
       rows: rows.map((row) => [row.vendor, row.productCode, row.productState, row.orderQty, row.shippedQty || 0, row.dueDate, row.deliveredDate, row.remarks, row.specialNote, row.sourceSheet]),
     };
