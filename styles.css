@@ -429,6 +429,11 @@ th.num {
   color: var(--bad);
 }
 
+.badge.deleted {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .badge.warn {
   background: #fff6df;
   color: var(--warn);
