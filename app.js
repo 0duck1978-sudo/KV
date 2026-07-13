@@ -1204,6 +1204,7 @@ function splitStatuses(status) {
 
 function statusClass(status) {
   if (status === "부족") return "bad";
+  if (status === "삭제된 품목") return "deleted";
   if (status === "포장완료") return "packed";
   if (status === "소진" || status === "일부납품" || status === "미납있음") return "warn";
   return "good";
