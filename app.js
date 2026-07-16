@@ -65,6 +65,15 @@ const els = {
   exportCsv: document.querySelector("#exportCsv"),
   resetData: document.querySelector("#resetData"),
   newProductButton: document.querySelector("#newProductButton"),
+  orderUploadButton: document.querySelector("#orderUploadButton"),
+  orderUploadFile: document.querySelector("#orderUploadFile"),
+  orderUploadDialog: document.querySelector("#orderUploadDialog"),
+  closeOrderUploadDialog: document.querySelector("#closeOrderUploadDialog"),
+  cancelOrderUpload: document.querySelector("#cancelOrderUpload"),
+  applyOrderUpload: document.querySelector("#applyOrderUpload"),
+  orderUploadSummary: document.querySelector("#orderUploadSummary"),
+  orderUploadHead: document.querySelector("#orderUploadHead"),
+  orderUploadBody: document.querySelector("#orderUploadBody"),
   deliveryUploadButton: document.querySelector("#deliveryUploadButton"),
   deliveryUploadFile: document.querySelector("#deliveryUploadFile"),
   deliveryUploadDialog: document.querySelector("#deliveryUploadDialog"),
@@ -149,6 +158,7 @@ let cloudSaveTimer = null;
 let applyingCloudState = false;
 let stateChannel = null;
 let stockOnlyEditTarget = null;
+let pendingOrderUpload = [];
 let pendingDeliveryUpload = [];
 
 function today() {
@@ -1318,6 +1328,177 @@ function deliveryUploadKey(row) {
   return [row.vendor, row.productCode, row.deliveredDate, row.qty].map((value) => String(value || "").trim().toLowerCase()).join("::");
 }
 
+function orderUploadKey(row) {
+  return [row.vendor, row.productCode, row.dueDate, row.orderQty].map((value) => String(value || "").trim().toLowerCase()).join("::");
+}
+
+function readOrderUploadRows(sheetRows) {
+  return sheetRows.map((row, index) => {
+    const vendor = resolveVendorName(uploadCell(row, ["업체", "업체명", "거래처", "거래처명"]));
+    const productCode = String(uploadCell(row, ["품번", "제품코드", "품목코드", "자재코드"])).trim();
+    const location = String(uploadCell(row, ["소번지", "위치", "저장위치"])).trim();
+    const initialStockRaw = uploadCell(row, ["초기재고", "기존재고", "현재재고", "재고"]);
+    const initialStock = initialStockRaw === "" ? 0 : parseUploadNumber(initialStockRaw);
+    const orderQty = parseUploadNumber(uploadCell(row, ["발주수량", "주문수량", "수량", "발주량"]));
+    const dueDate = parseUploadDate(uploadCell(row, ["납기일자", "납기", "납품예정일"]));
+    const specialNote = String(uploadCell(row, ["특이사항", "특이", "참고"])).trim();
+    const remarks = String(uploadCell(row, ["비고", "메모", "요청사항"])).trim();
+    return { vendor, productCode, location, initialStock, orderQty, dueDate, specialNote, remarks, sourceRow: index + 2 };
+  }).filter((row) => row.vendor || row.productCode || row.location || row.orderQty || row.dueDate);
+}
+
+function openOrderUpload() {
+  if (!window.XLSX) {
+    alert("엑셀 업로드 라이브러리를 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.");
+    return;
+  }
+  els.orderUploadFile.value = "";
+  els.orderUploadFile.click();
+}
+
+function parseOrderUploadFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const workbook = window.XLSX.read(reader.result, { type: "array", cellDates: true });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const uploadRows = readOrderUploadRows(rows);
+      pendingOrderUpload = buildOrderUploadPreview(uploadRows);
+      renderOrderUploadPreview();
+      els.orderUploadDialog.showModal();
+    } catch (error) {
+      console.error(error);
+      alert("엑셀 파일을 읽지 못했습니다. 파일 형식을 확인해주세요.");
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function buildOrderUploadPreview(uploadRows) {
+  const seen = new Set();
+  return uploadRows.map((row) => {
+    const errors = [];
+    if (!row.vendor) errors.push("업체없음");
+    if (!row.productCode) errors.push("품번없음");
+    if (!Number.isFinite(row.orderQty) || row.orderQty <= 0) errors.push("발주수량오류");
+    if (!Number.isFinite(row.initialStock) || row.initialStock < 0) errors.push("초기재고오류");
+    const duplicateKey = orderUploadKey(row);
+    const duplicate = seen.has(duplicateKey);
+    seen.add(duplicateKey);
+    if (duplicate) errors.push("파일내중복");
+    const existingProduct = inventoryRows().find((product) => product.vendor === row.vendor && product.productCode.toLowerCase() === row.productCode.toLowerCase());
+    const duplicateOrder = deliveryRows().some((record) =>
+      record.vendor === row.vendor
+        && record.productCode.toLowerCase() === row.productCode.toLowerCase()
+        && record.dueDate === row.dueDate
+        && Number(record.orderQty || 0) === Number(row.orderQty || 0)
+        && !isDelivered(record)
+    );
+    if (duplicateOrder) errors.push("기존발주중복");
+    return {
+      ...row,
+      mode: existingProduct ? "existing" : "new",
+      status: errors.length ? errors.join(", ") : existingProduct ? "기존품번 새발주" : "신규품번 등록",
+      apply: errors.length === 0,
+      existingProduct,
+    };
+  });
+}
+
+function renderOrderUploadPreview() {
+  const applicable = pendingOrderUpload.filter((row) => row.apply);
+  const summary = {
+    total: pendingOrderUpload.length,
+    apply: applicable.length,
+    existing: applicable.filter((row) => row.mode === "existing").length,
+    created: applicable.filter((row) => row.mode === "new").length,
+    skip: pendingOrderUpload.filter((row) => !row.apply).length,
+  };
+  els.orderUploadSummary.innerHTML = [
+    ["전체", summary.total],
+    ["적용", summary.apply],
+    ["기존품번", summary.existing],
+    ["신규품번", summary.created],
+    ["확인필요", summary.skip],
+  ].map(([label, value]) => `<span><strong>${fmtNum(value)}</strong>${escapeHtml(label)}</span>`).join("");
+  els.orderUploadHead.innerHTML = "<tr><th>결과</th><th>업체</th><th>품번</th><th>소번지</th><th>초기재고</th><th>발주수량</th><th>납기일자</th><th>특이사항</th><th>비고</th></tr>";
+  els.orderUploadBody.innerHTML = pendingOrderUpload.map((row) => `
+    <tr class="${row.apply ? "" : "upload-skip"}">
+      <td>${statusBadge(row.status)}</td>
+      <td>${textCell(row.vendor)}</td>
+      <td>${textCell(row.productCode)}</td>
+      <td>${textCell(row.location)}</td>
+      <td>${numCell(row.initialStock)}</td>
+      <td>${numCell(row.orderQty)}</td>
+      <td>${textCell(row.dueDate)}</td>
+      <td>${textCell(row.specialNote)}</td>
+      <td>${textCell(row.remarks)}</td>
+    </tr>
+  `).join("");
+  els.applyOrderUpload.disabled = applicable.length === 0;
+}
+
+function applyOrderUpload() {
+  const rows = pendingOrderUpload.filter((row) => row.apply);
+  if (!rows.length) return;
+  if (!confirm(`${fmtNum(rows.length)}건의 추가발주를 반영할까요?`)) return;
+  const affected = new Set();
+  for (const row of rows) {
+    const existingProduct = inventoryRows().find((product) => product.vendor === row.vendor && product.productCode.toLowerCase() === row.productCode.toLowerCase());
+    const finalLocation = existingProduct?.location || row.location;
+    const currentStock = existingProduct ? Number(existingProduct.currentStock || 0) : Number(row.initialStock || 0);
+    if (!existingProduct) {
+      customProducts.push({
+        id: makeId("product"),
+        seq: "",
+        productCode: row.productCode,
+        location: row.location,
+        baseStock: Number(row.initialStock || 0),
+        orderQty: row.orderQty,
+        currentStock,
+        vendor: row.vendor,
+        note: row.specialNote,
+        finishedQty: 0,
+        stockInput: Number(row.initialStock || 0),
+        checkedDate: today(),
+      });
+    }
+    customDeliveries.push({
+      id: makeId("delivery"),
+      vendor: row.vendor,
+      productCode: row.productCode,
+      location: finalLocation,
+      orderQty: row.orderQty,
+      productState: "",
+      currentStock,
+      dueDate: row.dueDate,
+      deliveredDate: "",
+      remarks: row.remarks,
+      specialNote: row.specialNote,
+      shareByProduct: shouldShareProductStock(row.productCode),
+      sourceSheet: "추가발주업로드",
+      sourceRow: row.sourceRow,
+    });
+    deletedVendors = deletedVendors.filter((name) => name !== row.vendor);
+    deletedProducts = deletedProducts.filter((key) => key !== `${row.vendor}::${row.productCode}`);
+    affected.add(`${row.vendor}::${row.productCode}`);
+  }
+  saveCustomData();
+  saveDeletedItems();
+  els.orderUploadDialog.close();
+  pendingOrderUpload = [];
+  populateSelects();
+  render();
+  sendInventoryAlert({
+    kind: "추가발주 업로드",
+    qty: rows.reduce((sum, row) => sum + Number(row.orderQty || 0), 0),
+    memo: `${fmtNum(rows.length)}건 적용 / ${[...affected].slice(0, 5).join(", ")}${affected.size > 5 ? " 외" : ""}`,
+  });
+}
+
 function readDeliveryUploadRows(sheetRows) {
   return sheetRows.map((row, index) => {
     const vendor = resolveVendorName(uploadCell(row, ["업체", "업체명", "거래처", "거래처명"]));
@@ -2160,6 +2341,7 @@ async function handleSession(session) {
   els.signedInUser.textContent = `${profile.email}${isAdmin ? " · 관리자" : ""}`;
   els.manageUsersButton.hidden = !isAdmin;
   els.manageItemsButton.hidden = !isAdmin;
+  els.orderUploadButton.hidden = !isAdmin;
   els.deliveryUploadButton.hidden = !isAdmin;
   els.resetData.hidden = !isAdmin;
   try {
@@ -2295,6 +2477,11 @@ els.clearHistoryDates.addEventListener("click", () => {
 els.exportCsv.addEventListener("click", exportCsv);
 els.resetData.addEventListener("click", resetData);
 els.newProductButton.addEventListener("click", openProductDialog);
+els.orderUploadButton.addEventListener("click", openOrderUpload);
+els.orderUploadFile.addEventListener("change", parseOrderUploadFile);
+els.applyOrderUpload.addEventListener("click", applyOrderUpload);
+els.closeOrderUploadDialog.addEventListener("click", () => els.orderUploadDialog.close());
+els.cancelOrderUpload.addEventListener("click", () => els.orderUploadDialog.close());
 els.deliveryUploadButton.addEventListener("click", openDeliveryUpload);
 els.deliveryUploadFile.addEventListener("change", parseDeliveryUploadFile);
 els.applyDeliveryUpload.addEventListener("click", applyDeliveryUpload);
