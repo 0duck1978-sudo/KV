@@ -379,6 +379,48 @@ textarea:focus {
   position: relative;
 }
 
+.upload-dialog {
+  width: min(96vw, 1180px);
+}
+
+.upload-summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 14px 0;
+}
+
+.upload-summary span {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  text-align: center;
+}
+
+.upload-summary strong {
+  color: var(--ink);
+  font-size: 20px;
+}
+
+.upload-preview-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.upload-preview-wrap table {
+  min-width: 900px;
+}
+
+.upload-skip {
+  background: #fff7ed;
+}
+
 table {
   border-collapse: collapse;
   min-width: 980px;

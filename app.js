@@ -42,6 +42,7 @@ const els = {
   metricStock: document.querySelector("#metricStock"),
   form: document.querySelector("#movementForm"),
   vendorInput: document.querySelector("#vendorInput"),
+  vendorEntryList: document.querySelector("#vendorEntryList"),
   productInput: document.querySelector("#productInput"),
   productList: document.querySelector("#productList"),
   typeInput: document.querySelector("#typeInput"),
@@ -64,6 +65,15 @@ const els = {
   exportCsv: document.querySelector("#exportCsv"),
   resetData: document.querySelector("#resetData"),
   newProductButton: document.querySelector("#newProductButton"),
+  deliveryUploadButton: document.querySelector("#deliveryUploadButton"),
+  deliveryUploadFile: document.querySelector("#deliveryUploadFile"),
+  deliveryUploadDialog: document.querySelector("#deliveryUploadDialog"),
+  closeDeliveryUploadDialog: document.querySelector("#closeDeliveryUploadDialog"),
+  cancelDeliveryUpload: document.querySelector("#cancelDeliveryUpload"),
+  applyDeliveryUpload: document.querySelector("#applyDeliveryUpload"),
+  deliveryUploadSummary: document.querySelector("#deliveryUploadSummary"),
+  deliveryUploadHead: document.querySelector("#deliveryUploadHead"),
+  deliveryUploadBody: document.querySelector("#deliveryUploadBody"),
   manageItemsButton: document.querySelector("#manageItemsButton"),
   manageDialog: document.querySelector("#manageDialog"),
   manageVendor: document.querySelector("#manageVendor"),
@@ -139,6 +149,7 @@ let cloudSaveTimer = null;
 let applyingCloudState = false;
 let stateChannel = null;
 let stockOnlyEditTarget = null;
+let pendingDeliveryUpload = [];
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -917,18 +928,33 @@ function populateSelects() {
   const filterOptions = allVendors()
     .map((vendor) => `<option value="${escapeHtml(vendor)}">${escapeHtml(vendor)}</option>`)
     .join("");
-  els.vendorInput.innerHTML = entryOptions;
+  updateVendorEntryList();
   els.newVendor.innerHTML = `${filterOptions}<option value="__new__">새 업체 등록</option>`;
   els.vendorFilter.innerHTML = `<option value="all">전체 업체</option>${filterOptions}`;
   updateProductList();
 }
 
+function resolveVendorName(value) {
+  const query = String(value || "").trim().toLowerCase();
+  return allVendors().find((vendor) => vendor.toLowerCase() === query) || String(value || "").trim();
+}
+
+function updateVendorEntryList() {
+  const query = els.vendorInput.value.trim().toLowerCase();
+  const vendors = allVendors()
+    .filter((vendor) => query.length >= 2 && vendor.toLowerCase().includes(query))
+    .slice(0, 50);
+  els.vendorEntryList.innerHTML = vendors.map((vendor) => `<option value="${escapeHtml(vendor)}"></option>`).join("");
+}
+
 function updateProductList() {
-  const vendor = els.vendorInput.value;
+  const vendor = resolveVendorName(els.vendorInput.value);
+  const query = els.productInput.value.trim().toLowerCase();
   const products = inventoryRows()
     .filter((item) => item.vendor === vendor)
     .map((item) => item.productCode)
     .filter((value, index, arr) => arr.indexOf(value) === index)
+    .filter((value) => query.length >= 4 && value.toLowerCase().includes(query))
     .sort((a, b) => a.localeCompare(b, "ko"));
   els.productList.innerHTML = products.map((code) => `<option value="${escapeHtml(code)}"></option>`).join("");
 }
@@ -1221,7 +1247,7 @@ function escapeHtml(value) {
 
 function addMovement(event) {
   event.preventDefault();
-  const vendor = els.vendorInput.value;
+  const vendor = resolveVendorName(els.vendorInput.value);
   const productCode = els.productInput.value.trim();
   const qty = Number(els.qtyInput.value);
   const item = inventoryRows().find((row) => row.vendor === vendor && row.productCode === productCode);
@@ -1251,6 +1277,230 @@ function addMovement(event) {
   els.memoInput.value = "";
   render();
   notifyMovement(movements[movements.length - 1]);
+}
+
+function normalizeHeader(value) {
+  return String(value || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function uploadCell(row, names) {
+  const keys = Object.keys(row);
+  for (const name of names) {
+    const target = normalizeHeader(name);
+    const key = keys.find((item) => normalizeHeader(item) === target);
+    if (key !== undefined) return row[key];
+  }
+  return "";
+}
+
+function parseUploadNumber(value) {
+  if (value === undefined || value === null || value === "") return 0;
+  const number = Number(String(value).replace(/,/g, "").trim());
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function parseUploadDate(value) {
+  if (!value) return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  if (typeof value === "number" && window.XLSX?.SSF) {
+    const date = window.XLSX.SSF.parse_date_code(value);
+    if (date) return `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}`;
+  }
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4})[-./년 ]\s*(\d{1,2})[-./월 ]\s*(\d{1,2})/);
+  if (match) return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+  return text;
+}
+
+function deliveryUploadKey(row) {
+  return [row.vendor, row.productCode, row.deliveredDate, row.qty].map((value) => String(value || "").trim().toLowerCase()).join("::");
+}
+
+function readDeliveryUploadRows(sheetRows) {
+  return sheetRows.map((row, index) => {
+    const vendor = resolveVendorName(uploadCell(row, ["업체", "업체명", "거래처", "거래처명"]));
+    const productCode = String(uploadCell(row, ["품번", "제품코드", "품목코드", "자재코드"])).trim();
+    const qty = parseUploadNumber(uploadCell(row, ["납품수량", "출하수량", "수량", "납품량"]));
+    const deliveredDate = parseUploadDate(uploadCell(row, ["납품일자", "출하일자", "일자"]));
+    const dueDate = parseUploadDate(uploadCell(row, ["납기일자", "납기"]));
+    const memo = String(uploadCell(row, ["비고", "특이사항", "메모"])).trim();
+    return { vendor, productCode, qty, deliveredDate, dueDate, memo, sourceRow: index + 2 };
+  }).filter((row) => row.vendor || row.productCode || row.qty || row.deliveredDate);
+}
+
+function openDeliveryUpload() {
+  if (!window.XLSX) {
+    alert("엑셀 업로드 라이브러리를 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.");
+    return;
+  }
+  els.deliveryUploadFile.value = "";
+  els.deliveryUploadFile.click();
+}
+
+function parseDeliveryUploadFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const workbook = window.XLSX.read(reader.result, { type: "array", cellDates: true });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const uploadRows = readDeliveryUploadRows(rows);
+      pendingDeliveryUpload = buildDeliveryUploadPreview(uploadRows);
+      renderDeliveryUploadPreview();
+      els.deliveryUploadDialog.showModal();
+    } catch (error) {
+      console.error(error);
+      alert("엑셀 파일을 읽지 못했습니다. 파일 형식을 확인해주세요.");
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function openRecordsForUpload(row) {
+  const records = deliveryRows()
+    .filter((record) => record.vendor === row.vendor && record.productCode.toLowerCase() === row.productCode.toLowerCase())
+    .filter((record) => !isDelivered(record));
+  const dueMatches = row.dueDate ? records.filter((record) => record.dueDate === row.dueDate) : [];
+  return (dueMatches.length ? dueMatches : records)
+    .sort((a, b) => (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99") || a.sourceRow - b.sourceRow);
+}
+
+function buildDeliveryUploadPreview(uploadRows) {
+  const seen = new Set();
+  return uploadRows.flatMap((row) => {
+    const errors = [];
+    if (!row.vendor) errors.push("업체없음");
+    if (!row.productCode) errors.push("품번없음");
+    if (!Number.isFinite(row.qty) || row.qty <= 0) errors.push("수량오류");
+    if (!row.deliveredDate) errors.push("납품일자없음");
+    const duplicateKey = deliveryUploadKey(row);
+    const duplicate = seen.has(duplicateKey);
+    seen.add(duplicateKey);
+    if (duplicate) errors.push("파일내중복");
+    const item = inventoryRows().find((product) => product.vendor === row.vendor && product.productCode.toLowerCase() === row.productCode.toLowerCase());
+    if (!item) errors.push("품번없음");
+    const alreadyDelivered = deliveryRows().some((record) =>
+      record.vendor === row.vendor
+        && record.productCode.toLowerCase() === row.productCode.toLowerCase()
+        && isDelivered(record)
+        && (record.deliveredDate === row.deliveredDate || Number(record.orderQty || 0) === row.qty)
+    );
+    const records = openRecordsForUpload(row);
+    if (!records.length && alreadyDelivered) errors.push("이미납품");
+    if (!records.length && !alreadyDelivered) errors.push("미납발주없음");
+    if (errors.length) {
+      return [{ ...row, status: errors.join(", "), mode: "skip", apply: false, recordId: "" }];
+    }
+
+    let remaining = row.qty;
+    const plans = [];
+    for (const record of records) {
+      if (remaining <= 0) break;
+      const qty = Math.min(Number(record.orderQty || 0), remaining);
+      remaining -= qty;
+      const packed = isFullyPacked(record);
+      const partial = qty < Number(record.orderQty || 0);
+      plans.push({
+        ...row,
+        qty,
+        recordId: record.id,
+        dueDate: record.dueDate || row.dueDate,
+        mode: packed ? "packed" : "ship",
+        status: packed ? "포장완료→납품완료" : partial ? "일부납품" : "재고차감→납품완료",
+        apply: true,
+      });
+    }
+    if (remaining > 0) {
+      plans.push({ ...row, qty: remaining, status: "수량초과", mode: "skip", apply: false, recordId: "" });
+    }
+    return plans;
+  });
+}
+
+function renderDeliveryUploadPreview() {
+  const applicable = pendingDeliveryUpload.filter((row) => row.apply);
+  const summary = {
+    total: pendingDeliveryUpload.length,
+    apply: applicable.length,
+    packed: applicable.filter((row) => row.mode === "packed").length,
+    ship: applicable.filter((row) => row.mode === "ship").length,
+    skip: pendingDeliveryUpload.filter((row) => !row.apply).length,
+  };
+  els.deliveryUploadSummary.innerHTML = [
+    ["전체", summary.total],
+    ["적용", summary.apply],
+    ["포장완료 상태변경", summary.packed],
+    ["재고차감", summary.ship],
+    ["확인필요", summary.skip],
+  ].map(([label, value]) => `<span><strong>${fmtNum(value)}</strong>${escapeHtml(label)}</span>`).join("");
+  els.deliveryUploadHead.innerHTML = "<tr><th>결과</th><th>업체</th><th>품번</th><th>납품수량</th><th>납품일자</th><th>납기일자</th><th>비고</th></tr>";
+  els.deliveryUploadBody.innerHTML = pendingDeliveryUpload.map((row) => `
+    <tr class="${row.apply ? "" : "upload-skip"}">
+      <td>${statusBadge(row.status)}</td>
+      <td>${textCell(row.vendor)}</td>
+      <td>${textCell(row.productCode)}</td>
+      <td>${numCell(row.qty)}</td>
+      <td>${textCell(row.deliveredDate)}</td>
+      <td>${textCell(row.dueDate)}</td>
+      <td>${textCell(row.memo)}</td>
+    </tr>
+  `).join("");
+  els.applyDeliveryUpload.disabled = applicable.length === 0;
+}
+
+function applyDeliveryUpload() {
+  const rows = pendingDeliveryUpload.filter((row) => row.apply);
+  if (!rows.length) return;
+  if (!confirm(`${fmtNum(rows.length)}건을 납품완료로 반영할까요?`)) return;
+  const affected = new Set();
+  for (const row of rows) {
+    const record = deliveryRows().find((item) => item.id === row.recordId);
+    if (!record) continue;
+    const shippedQty = row.qty;
+    const originalQty = Number(record.orderQty || 0);
+    const done = shippedQty >= originalQty;
+    if (row.mode === "ship") {
+      movements.push({
+        id: makeId("movement"),
+        vendor: row.vendor,
+        productCode: row.productCode,
+        type: "out",
+        qty: shippedQty,
+        date: row.deliveredDate || today(),
+        memo: row.memo || "납품완료 업로드",
+        shareByProduct: shouldShareProductStock(row.productCode),
+        createdAt: new Date().toISOString(),
+      });
+      affected.add(`${row.vendor}::${row.productCode}`);
+      continue;
+    }
+    deliveryEdits[record.id] = {
+      ...(deliveryEdits[record.id] || {}),
+      orderQty: done ? originalQty : originalQty - shippedQty,
+      location: record.location || "",
+      productState: done ? "납품완료" : "일부납품,잔량포장완료",
+      dueDate: record.dueDate || row.dueDate || "",
+      deliveredDate: row.deliveredDate || today(),
+      specialNote: record.specialNote || "",
+      remarks: row.memo || record.remarks || "",
+      shareByProduct: shouldShareProductStock(record.productCode),
+    };
+    affected.add(`${row.vendor}::${row.productCode}`);
+  }
+  saveMovements();
+  saveDeliveryEdits();
+  els.deliveryUploadDialog.close();
+  pendingDeliveryUpload = [];
+  render();
+  sendInventoryAlert({
+    kind: "납품완료 업로드",
+    qty: rows.reduce((sum, row) => sum + Number(row.qty || 0), 0),
+    memo: `${fmtNum(rows.length)}건 적용 / ${[...affected].slice(0, 5).join(", ")}${affected.size > 5 ? " 외" : ""}`,
+  });
 }
 
 function makeId(prefix) {
@@ -1910,6 +2160,7 @@ async function handleSession(session) {
   els.signedInUser.textContent = `${profile.email}${isAdmin ? " · 관리자" : ""}`;
   els.manageUsersButton.hidden = !isAdmin;
   els.manageItemsButton.hidden = !isAdmin;
+  els.deliveryUploadButton.hidden = !isAdmin;
   els.resetData.hidden = !isAdmin;
   try {
     await loadCloudState(session.user);
@@ -2010,10 +2261,19 @@ document.querySelectorAll(".tab").forEach((tab) => {
 });
 
 els.form.addEventListener("submit", addMovement);
-els.vendorInput.addEventListener("change", () => {
+els.vendorInput.addEventListener("input", () => {
+  updateVendorEntryList();
   els.productInput.value = "";
   updateProductList();
 });
+els.vendorInput.addEventListener("focus", updateVendorEntryList);
+els.vendorInput.addEventListener("change", () => {
+  els.productInput.value = "";
+  els.vendorInput.value = resolveVendorName(els.vendorInput.value);
+  updateProductList();
+});
+els.productInput.addEventListener("input", updateProductList);
+els.productInput.addEventListener("focus", updateProductList);
 els.vendorFilter.addEventListener("change", render);
 els.searchInput.addEventListener("input", () => {
   selectedProductCode = "";
@@ -2035,6 +2295,11 @@ els.clearHistoryDates.addEventListener("click", () => {
 els.exportCsv.addEventListener("click", exportCsv);
 els.resetData.addEventListener("click", resetData);
 els.newProductButton.addEventListener("click", openProductDialog);
+els.deliveryUploadButton.addEventListener("click", openDeliveryUpload);
+els.deliveryUploadFile.addEventListener("change", parseDeliveryUploadFile);
+els.applyDeliveryUpload.addEventListener("click", applyDeliveryUpload);
+els.closeDeliveryUploadDialog.addEventListener("click", () => els.deliveryUploadDialog.close());
+els.cancelDeliveryUpload.addEventListener("click", () => els.deliveryUploadDialog.close());
 els.manageItemsButton.addEventListener("click", openManageDialog);
 els.manageVendor.addEventListener("change", populateManageProducts);
 els.manageProduct.addEventListener("input", populateManageRecords);

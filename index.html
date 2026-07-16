@@ -39,6 +39,8 @@
         <button id="manageUsersButton" class="ghost-btn" type="button" hidden>사용자 관리</button>
         <button id="signOutButton" class="ghost-btn" type="button">로그아웃</button>
         <button id="newProductButton" class="header-primary-btn" type="button">새 제품 등록</button>
+        <button id="deliveryUploadButton" class="ghost-btn" type="button">납품완료 업로드</button>
+        <input id="deliveryUploadFile" type="file" accept=".xlsx,.xls,.csv" hidden />
         <button id="manageItemsButton" class="ghost-btn" type="button">항목 관리</button>
         <button id="exportCsv" class="ghost-btn" type="button">CSV</button>
         <button id="resetData" class="ghost-btn danger" type="button">초기화</button>
@@ -69,7 +71,8 @@
         <form id="movementForm" class="movement-form">
           <label>
             업체
-            <select id="vendorInput" required></select>
+            <input id="vendorInput" list="vendorEntryList" autocomplete="off" required />
+            <datalist id="vendorEntryList"></datalist>
           </label>
           <label>
             품번
@@ -342,9 +345,31 @@
       </form>
     </dialog>
 
+    <dialog id="deliveryUploadDialog" class="edit-dialog upload-dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="dialog-vendor">업로드 전 미리보기 후 적용합니다</span>
+          <h2>납품완료 업로드</h2>
+        </div>
+        <button id="closeDeliveryUploadDialog" class="icon-btn" type="button" aria-label="닫기" title="닫기">×</button>
+      </div>
+      <div id="deliveryUploadSummary" class="upload-summary"></div>
+      <div class="upload-preview-wrap">
+        <table>
+          <thead id="deliveryUploadHead"></thead>
+          <tbody id="deliveryUploadBody"></tbody>
+        </table>
+      </div>
+      <div class="dialog-actions">
+        <button id="cancelDeliveryUpload" class="secondary-btn" type="button">취소</button>
+        <button id="applyDeliveryUpload" class="primary-btn" type="button">적용</button>
+      </div>
+    </dialog>
+
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="./config.js"></script>
     <script src="./data.js?v=jiseong-visible-20260714"></script>
-    <script src="./app.js?v=deleted-badge-20260713"></script>
+    <script src="./app.js?v=delivery-upload-20260716"></script>
   </body>
 </html>
